@@ -1,0 +1,26 @@
+# STING BCI Project Dependencies
+# Based on the "Original_Codes" folder analysis
+
+# Core scientific computing
+numpy
+scipy
+pandas
+
+# Machine Learning / Deep Learning
+tensorflow
+scikit-learn
+
+# Signal Processing
+mne
+# sympy is used in ERD_Groupe_Averaged.py
+sympy
+
+# Visualization
+matplotlib
+
+# Data handling (Excel / ODS)
+odfpy
+openpyxl
+
+# Specialized BCI components (Note: BCPy2000 may require manual installation from BCI2000 source)
+# BCPy2000
