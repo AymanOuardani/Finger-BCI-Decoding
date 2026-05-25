@@ -584,6 +584,7 @@ def run_correlation_analysis(subj_id, task, session=1, nclass=2,
 
 def main():
     if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
+        sys.argv.pop()
         subj_id, task = get_offline_args(description="ICA Correlation - Offline")
         run_correlation_analysis(subj_id, task, is_offline=True)
     else:

@@ -294,27 +294,26 @@ def generate_paths(subj_id, task, nclass, session_num, model_type, data_folder):
     """
     subject_folder = os.path.join(data_folder, f'S{subj_id:02}')
 
-    # Choose prefix based on task
-    if task == 'MI':
-        prefix = '*Imagery'
-    else:
-        prefix = '*Movement'
+    # Exact offline folder name and online wildcard prefix, per task
+    modality       = 'Imagery' if task == 'MI' else 'Movement'
+    offline_prefix = f'Offline{modality}'          # e.g. 'OfflineMovement'
+    online_prefix  = f'Online*{modality}'          # e.g. 'Online*Movement'
 
     if model_type == 'Finetune':
         # Fine-tuning: use only the Base block of the current session
-        prefix_online = f'{prefix}_Sess{session_num:02}'
+        prefix_online = f'{online_prefix}_Sess{session_num:02}'
         suffix        = f'{nclass}class_Base'
         pattern       = os.path.join(subject_folder, f'{prefix_online}*{suffix}')
         data_paths    = sorted(glob.glob(pattern))
     else:
-        # Orig training: start with all offline (no session suffix) data
-        offline_pattern = os.path.join(subject_folder, prefix)
-        data_paths = sorted(glob.glob(offline_pattern))
+        # Orig training: start with the offline folder (exact name, no wildcard)
+        offline_folder = os.path.join(subject_folder, offline_prefix)
+        data_paths = [offline_folder] if os.path.exists(offline_folder) else []
 
         # Then append every prior online session (sessions 1 … session_num-1)
         for session in range(1, session_num):
-            prefix_online   = f'{prefix}_Sess{session:02}'
-            online_pattern  = os.path.join(subject_folder, f'{prefix_online}*')
+            prefix_online  = f'{online_prefix}_Sess{session:02}'
+            online_pattern = os.path.join(subject_folder, f'{prefix_online}*')
             data_paths.extend(sorted(glob.glob(online_pattern)))
 
     return data_paths
@@ -1718,6 +1717,8 @@ def load_offline_raw_pair(subj_id, task):
     raw_folder, clean_folder, raw_files, clean_files = find_file_pairs_offline(subj_id, task)
     raw, _, _ = build_raw_from_mat_files(raw_files)
     raw_clean, _, _ = build_raw_from_mat_files(clean_files)
+    raw.notch_filter(np.arange(60, 501, 60))
+    raw_clean.notch_filter(np.arange(60, 501, 60))
     return raw, raw_clean
 
 
@@ -1741,6 +1742,8 @@ def load_online_raw_pair(subj_id, task, session, nclass, model_type):
     raw_folder, clean_folder, raw_files, clean_files = find_file_pairs_online(subj_id, task, session, nclass, model_type)
     raw, _, _ = build_raw_from_mat_files(raw_files)
     raw_clean, _, _ = build_raw_from_mat_files(clean_files)
+    raw.notch_filter(np.arange(60, 501, 60))
+    raw_clean.notch_filter(np.arange(60, 501, 60))
     return raw, raw_clean
 
 

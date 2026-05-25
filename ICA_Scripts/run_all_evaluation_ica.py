@@ -24,9 +24,9 @@ LOG_FILE        = os.path.join(ICA_SCRIPTS_DIR, 'evaluation_ica_log.txt')
 
 # ── Configuration — edit these to run a different combo ──────────────────────
 SESSION_NUM = 1
-NCLASS      = 3
-TASK        = 'MI'
-MODELTYPE   = 'Finetune'    # "Orig" = Base Model | "Finetune" = Fine Tune
+NCLASS      = 2
+TASK        = 'ME'
+MODELTYPE   = 'Orig'    # "Orig" = Base Model | "Finetune" = Fine Tune
 SUBJECTS    = list(range(1, 22))
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -73,7 +73,7 @@ PADDING_LENGTH   = 100   # zero-padding length for bandpass edge artefacts
 # ICA PARAMETERS
 # =============================================================================
 
-ICA_N_COMPONENTS       = 64    # for individual evaluation / visualization
+ICA_N_COMPONENTS       = 128    # for individual evaluation / visualization
 ICA_N_COMPONENTS_GROUP = 20    # for group ERD (article method)
 ICA_METHOD             = "fastica"
 ICA_ENVELOPE_SMOOTH_HZ = 2.0   # low-pass cutoff for smoothed Hilbert envelope
@@ -91,7 +91,7 @@ ALL_SUBJECTS = list(range(1, 22))   # subjects S01 to S21
 
 # Subjects included in group ERD plots — edit this list to restrict the group.
 # Set to ALL_SUBJECTS to include everyone.
-GROUP_ERD_SUBJECTS = [2, 3, 5, 7, 9, 12, 16]
+GROUP_ERD_SUBJECTS = range(1, 22)   # S01 to S21
 
 KEEP_LABELS = {
     2: [1, 4],        # 2-class: thumb, pinky

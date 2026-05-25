@@ -213,7 +213,7 @@ def plot_erd_topo(erd_per_band, finger_names, info, title, save_path=None):
     )
     fig.subplots_adjust(top=0.88, right=0.88)
 
-    vmin, vmax = -1, 1
+    vmin, vmax = -0.5, 0.5
 
     for r, band_label in enumerate(band_labels):
         for c, fname in enumerate(finger_names):
@@ -296,7 +296,7 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
     )
     fig.subplots_adjust(top=0.88, right=0.88, hspace=0.1)
 
-    vmin, vmax = -1, 1
+    vmin, vmax = -0.5, 0.5
 
     row_labels = [f"Before ICA\n{band_label}", f"After ICA\n{band_label}"]
     row_dicts  = [erd_raw, erd_ica]

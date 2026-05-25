@@ -93,6 +93,7 @@ def clean_offline(subj_id, task):
 def main():
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
+            sys.argv.pop()
             subj_id, task = get_offline_args(description="Interactive ICA - Offline")
             clean_offline(subj_id, task)
         else:

@@ -18,10 +18,10 @@ LOG_FILE        = os.path.join(ICA_SCRIPTS_DIR, 'training_ica_log.txt')
 
 # ── Configuration — edit these to run a different combo ──────────────────────
 SESSION_NUM = 1
-NCLASS      = 3
+NCLASS      = 2
 TASK        = 'MI'
-MODELTYPE   = 'Finetune'    # "Orig" = train from scratch | "Finetune" = fine-tune Orig
-SUBJECTS    = [1,2,3,4,5,6,7,8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+MODELTYPE   = 'Orig'    # "Orig" = train from scratch | "Finetune" = fine-tune Orig
+SUBJECTS    = [4]
 # ─────────────────────────────────────────────────────────────────────────────
 
 
