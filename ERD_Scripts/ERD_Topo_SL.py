@@ -138,12 +138,17 @@ def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
 
     try:
         raw    = load_fn()
-        epochs = build_epochs_no_reject(raw, finger_pairs, tmax=tmax)
+        # Apply the 20 µV noisy-trial rejection to the Before-ICA path too so
+        # the Before / After topomaps are computed on comparable trial sets.
+        epochs = build_epochs(raw, finger_pairs, tmax=tmax)
+        if len(epochs) == 0:
+            print("\n[ERROR] All Before-ICA trials rejected (mean channel std > 20 µV).")
+            sys.exit(1)
     except Exception as e:
         print(f"\n[ERROR] {e}")
         sys.exit(1)
 
-    print(f"\n  Epochs: {len(epochs)}")
+    print(f"\n  Epochs (Before ICA, with rejection): {len(epochs)}")
     for eid, name in {eid: n for n, eid in finger_pairs}.items():
         print(f"    {name}: {(epochs.events[:, 2] == eid).sum()}")
 

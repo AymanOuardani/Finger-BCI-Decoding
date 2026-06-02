@@ -58,13 +58,15 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
 
         try:
             raw    = load_fn(subj)
-            epochs = build_epochs_no_reject(raw, finger_pairs, tmax=tmax)
+            # Apply the same 20 µV rejection to the Before-ICA path so the
+            # Before / After topomaps are computed on comparable trial sets.
+            epochs = build_epochs(raw, finger_pairs, tmax=tmax)
         except Exception as e:
             print(f"skipped ({e})")
             continue
 
         if len(epochs) == 0:
-            print("skipped (no epochs found)")
+            print("skipped (no epochs left after 20 µV rejection)")
             continue
 
         subj_ok = False

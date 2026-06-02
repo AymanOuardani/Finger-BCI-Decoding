@@ -33,12 +33,12 @@ ICA_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE        = os.path.join(ICA_SCRIPTS_DIR, 'cleaning_ica_log.txt')
 
 # ── Configuration — edit these before running ────────────────────────────────
-IS_OFFLINE  = True
+IS_OFFLINE  = False
 SESSION_NUM = 1
-NCLASS      = 3
+NCLASS      = 2
 TASK        = 'ME'
-MODELTYPE   = 'Finetune'    # ignored when IS_OFFLINE = True
-SUBJECTS    = list(range(3, 22))
+MODELTYPE   = 'Orig'    # ignored when IS_OFFLINE = True
+SUBJECTS    = list(range(1, 22))
 # ─────────────────────────────────────────────────────────────────────────────
 
 

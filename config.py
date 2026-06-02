@@ -91,7 +91,7 @@ ALL_SUBJECTS = list(range(1, 22))   # subjects S01 to S21
 
 # Subjects included in group ERD plots — edit this list to restrict the group.
 # Set to ALL_SUBJECTS to include everyone.
-GROUP_ERD_SUBJECTS = range(1, 22)   # S01 to S21
+GROUP_ERD_SUBJECTS = [1,2,3,4,9]  # S01 to S21
 
 KEEP_LABELS = {
     2: [1, 4],        # 2-class: thumb, pinky

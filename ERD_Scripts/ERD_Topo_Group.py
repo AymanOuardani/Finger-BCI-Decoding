@@ -68,13 +68,16 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
 
         try:
             raw    = load_fn(subj)
-            epochs = build_epochs_no_reject(raw, finger_pairs, tmax=tmax)
+            # Apply the same 20 µV noisy-trial rejection as the After-ICA
+            # path so the Before / After topomaps are computed on data of
+            # comparable cleanliness.
+            epochs = build_epochs(raw, finger_pairs, tmax=tmax)
         except Exception as e:
             print(f"skipped ({e})")
             continue
 
         if len(epochs) == 0:
-            print("skipped (no epochs found)")
+            print("skipped (no epochs left after 20 µV rejection)")
             continue
 
         subj_ok = False
@@ -129,12 +132,16 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
         print("[ERROR] No valid subjects — check paths and arguments.")
         sys.exit(1)
 
-    # Get channel info from first valid subject
+    # Get channel info from first valid subject.
+    # We only need ep.info (channel layout) here, so use the no-rejection
+    # path — this only affects which subject we *find* the info from, not the
+    # info itself, and it makes the lookup robust even if a particular
+    # subject's pre-ICA trials all exceed the 20 µV rule.
     info_subj = None
     for subj in ALL_SUBJECTS:
         try:
             raw = load_fn(subj)
-            ep  = build_epochs(raw, finger_pairs, tmax=tmax)
+            ep  = build_epochs_no_reject(raw, finger_pairs, tmax=tmax)
             if len(ep) > 0:
                 info_subj = ep.info
                 break

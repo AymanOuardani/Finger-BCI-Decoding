@@ -11,6 +11,7 @@ See CLAUDE.md for the full function index.
 
 import numpy as np
 import os
+import sys
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import tensorflow as tf
 import glob
@@ -1777,12 +1778,139 @@ def launch_viewer(raw, raw_clean, subj_id, task, session=0, nclass=0, model_type
     connect(fig_raw); connect(fig_clean); plt.show(block=True)
 
 
+def _open_signal_viewers_nonblocking(raw, raw_clean, subj_id, task, session,
+                                     nclass, model_type, ica):
+    """
+    Open RAW vs ICA-cleaned MNE browsers without calling plt.show.
+
+    Used by the interactive inspector's CONFIRM button so the inspector
+    stays open while the user inspects the cleaned signals.
+    """
+    info, ch_names = make_info()
+    event_id    = {"Thumb": 1, "Index": 2, "Middle": 3, "Pinky": 4, "TrialEnd": 9}
+    model_label = "Base Model" if model_type == "Orig" else "Fine-tuned Model"
+    event_color = {
+        event_id["Thumb"]:  "green",
+        event_id["Index"]:  "blue",
+        event_id["Middle"]: "orange",
+        event_id["Pinky"]:  "red",
+        event_id["TrialEnd"]: "gray",
+    }
+    common_kwargs = dict(
+        n_channels=20, duration=10.0, scalings=dict(eeg=50e-6),
+        show_scrollbars=True, show_options=True, block=False,
+        overview_mode="channels", color=dict(eeg="steelblue"),
+        event_color=event_color,
+    )
+    fig_raw = raw.plot(
+        title=f"RAW - S{subj_id:02} | {task} | Sess{session:02} | {model_label}",
+        **common_kwargs,
+    )
+    clean_title = (f"ICA CLEANED ({len(ica.exclude)} components removed) - "
+                   f"S{subj_id:02} | {task} | Sess{session:02} | {model_label}")
+    fig_clean = raw_clean.plot(title=clean_title, **common_kwargs)
+    return [fig_raw, fig_clean]
+
+
+def _compute_erd_for_inspector(raw_orig, raw_clean, task, session, nclass,
+                               model_type):
+    """
+    Compute ERD topomaps (Before vs After ICA, Fullband) and return the figure.
+
+    Lazy-imports from ERD_Scripts/ERD_Topo.py to avoid circular dependency.
+    Returns the matplotlib Figure or None on failure.
+    """
+    erd_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "ERD_Scripts")
+    if erd_dir not in sys.path:
+        sys.path.insert(0, erd_dir)
+    try:
+        from ERD_Topo import (
+            _preprocess_raw, build_epochs, _compute_erd_band,
+            plot_erd_comparison, BANDS_CONFIG, FINGERS, FINGERS_OFFLINE,
+            TMAX_ONLINE, TMAX_OFFLINE, TASK_WIN_ONLINE, TASK_WIN_OFFLINE,
+        )
+    except Exception as e:
+        print(f"  [ERROR] Could not import ERD_Topo helpers: {e}")
+        return None
+
+    is_offline   = (session == 0) or (str(model_type).lower() == "offline")
+    finger_pairs = FINGERS_OFFLINE if is_offline else FINGERS.get(nclass, FINGERS[2])
+    tmax         = TMAX_OFFLINE if is_offline else TMAX_ONLINE
+    task_win     = TASK_WIN_OFFLINE if is_offline else TASK_WIN_ONLINE
+    finger_names = [n for n, _ in finger_pairs]
+
+    print("  Preprocessing for ERD (notch + CAR + bandpass 2–30 Hz + downsample) ...")
+    raw_pre       = _preprocess_raw(raw_orig)
+    raw_clean_pre = _preprocess_raw(raw_clean)
+
+    # Apply the 20 µV noisy-trial rejection on BOTH Before- and After-ICA paths
+    # so the two topomaps are computed on comparably clean trial sets.
+    print("  Building epochs (mean channel std > 20 µV rejection on both paths) ...")
+    epochs_raw   = build_epochs(raw_pre,       finger_pairs, tmax=tmax)
+    epochs_clean = build_epochs(raw_clean_pre, finger_pairs, tmax=tmax)
+    if len(epochs_raw) == 0:
+        print("  [WARN] All Before-ICA trials rejected — ERD not computed.")
+        return None
+    if len(epochs_clean) == 0:
+        print("  [WARN] All After-ICA trials rejected — ERD not computed.")
+        return None
+
+    fmin, fmax_band, band_label = BANDS_CONFIG["Beta"][0]
+    print(f"  Computing {band_label} (Before ICA) ...")
+    erd_before = _compute_erd_band(epochs_raw,   finger_pairs, fmin, fmax_band, task_win)
+    print(f"  Computing {band_label} (After ICA) ...")
+    erd_after  = _compute_erd_band(epochs_clean, finger_pairs, fmin, fmax_band, task_win)
+
+    title = f"ERD — Before vs After ICA  |  {band_label}"
+    existing = set(plt.get_fignums())
+    plot_erd_comparison(
+        erd_before, erd_after, band_label, finger_names, epochs_raw.info,
+        title, save_path=None, show=False,
+    )
+    new_fignums = set(plt.get_fignums()) - existing
+    if not new_fignums:
+        return None
+    erd_fig = plt.figure(sorted(new_fignums)[-1])
+
+    # The figure was created with show=False inside an event callback while
+    # plt.show(block=True) is already running upstream — its Tk window is
+    # created but never raised. Force it to appear explicitly:
+    try:
+        erd_fig.canvas.manager.set_window_title("ERD — Before vs After ICA")
+    except Exception:
+        pass
+    try:
+        erd_fig.canvas.manager.show()
+    except Exception:
+        try: erd_fig.show()
+        except Exception: pass
+    try:
+        win = erd_fig.canvas.manager.window
+        win.deiconify(); win.lift(); win.focus_force()
+        win.attributes("-topmost", True)
+        win.after(250, lambda: win.attributes("-topmost", False))
+    except Exception:
+        pass
+    try:
+        erd_fig.canvas.draw()
+        erd_fig.canvas.flush_events()
+    except Exception:
+        pass
+    try:
+        plt.pause(0.001)   # let Tk paint the new window now, not later
+    except Exception:
+        pass
+    return erd_fig
+
+
 def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
                            task, session, nclass, model_type, manual_extra=None):
     ch_names     = raw_filt.info["ch_names"]
     n_comp       = ica.n_components_
     sfreq        = raw_filt.info["sfreq"]
-    manual_extra = []
+    manual_extra = []        # user-clicked extras → labelled [manual]
+    manual_kept  = []        # user-clicked keeps  → override threshold exclusion
     src_data = None
     eog_scores = None
     times = np.array([0.0])
@@ -1831,27 +1959,62 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
         except Exception: pass
 
     outer = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[1, 3], left=0.12, right=0.97, top=0.95, bottom=0.04, wspace=0.08)
-    left_gs = gridspec.GridSpecFromSubplotSpec(6, 1, subplot_spec=outer[0], hspace=0.6, height_ratios=[2.5, 0.5, 0.5, 0.5, 1.2, 0.8])
-    ax_hist, ax_eog_sl, ax_mus_sl, ax_time_sl, ax_info, ax_btn_area = [fig.add_subplot(left_gs[i]) for i in range(6)]
-    right_gs = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=outer[1], hspace=0.04, height_ratios=[1, 0.06])
-    ax_sources, ax_nav = fig.add_subplot(right_gs[0]), fig.add_subplot(right_gs[1])
+    # Left column: histogram + EOG/EMG sliders + info + buttons (time slider moved out)
+    left_gs = gridspec.GridSpecFromSubplotSpec(5, 1, subplot_spec=outer[0], hspace=0.6, height_ratios=[2.5, 0.5, 0.5, 1.2, 0.8])
+    ax_hist, ax_eog_sl, ax_mus_sl, ax_info, ax_btn_area = [fig.add_subplot(left_gs[i]) for i in range(5)]
+    # Right column: sources (top-left), vertical page slider (top-right), horizontal time slider (bottom)
+    right_gs   = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=outer[1],
+                                                  hspace=0.04, wspace=0.015,
+                                                  height_ratios=[1, 0.06], width_ratios=[25, 1])
+    ax_sources = fig.add_subplot(right_gs[0, 0])
+    ax_pg_area = fig.add_subplot(right_gs[0, 1])
+    ax_nav     = fig.add_subplot(right_gs[1, :])
     sl_eog = Slider(ax_eog_sl, "EOG thresh", 0.1, 1.0, valinit=state["eog_thresh"], valstep=0.05, color=KEEP_COLOR)
     sl_mus = Slider(ax_mus_sl, "EMG thresh", -3.0, 0.5, valinit=-1.0, valstep=0.1, color=KEEP_COLOR)
-    sl_time = Slider(ax_time_sl, "Time window (s)", 0.0, max(0.1, raw_filt.times[-1] - state["time_window"]), valinit=0.0, valstep=1.0, color="#7F8C8D")
+
+    # Two buttons side-by-side: CONFIRM | SHOW ERD
     ax_btn_area.axis("off"); btn_pos = ax_btn_area.get_position()
-    ax_confirm = fig.add_axes([btn_pos.x0 + btn_pos.width * 0.1, btn_pos.y0, btn_pos.width * 0.8, btn_pos.height * 0.8])
+    ax_confirm = fig.add_axes([btn_pos.x0 + btn_pos.width * 0.04, btn_pos.y0,
+                               btn_pos.width * 0.44, btn_pos.height * 0.8])
     btn_confirm = Button(ax_confirm, "CONFIRM", color="#27AE60", hovercolor="#2ECC71")
-    btn_confirm.label.set_fontsize(12); btn_confirm.label.set_fontweight("bold"); btn_confirm.label.set_color("white")
+    btn_confirm.label.set_fontsize(11); btn_confirm.label.set_fontweight("bold"); btn_confirm.label.set_color("white")
+    ax_erd = fig.add_axes([btn_pos.x0 + btn_pos.width * 0.52, btn_pos.y0,
+                           btn_pos.width * 0.44, btn_pos.height * 0.8])
+    btn_erd = Button(ax_erd, "SHOW ERD", color="#2980B9", hovercolor="#3498DB")
+    btn_erd.label.set_fontsize(11); btn_erd.label.set_fontweight("bold"); btn_erd.label.set_color("white")
+
+    # Time slider — horizontal, sits in ax_nav (now under the sources axis)
     ax_nav.axis("off"); nav_pos = ax_nav.get_position()
-    ax_pg_sl = fig.add_axes([nav_pos.x0 + nav_pos.width * 0.3, nav_pos.y0, nav_pos.width * 0.4, nav_pos.height])
-    sl_page = Slider(ax_pg_sl, "Page", 0, max(1, n_pages - 1), valinit=0, valstep=1, color="#95A5A6")
+    ax_time_sl = fig.add_axes([nav_pos.x0 + nav_pos.width * 0.10, nav_pos.y0,
+                               nav_pos.width * 0.80, nav_pos.height])
+    sl_time = Slider(ax_time_sl, "Time (s)", 0.0,
+                     max(0.1, raw_filt.times[-1] - state["time_window"]),
+                     valinit=0.0, valstep=1.0, color="#7F8C8D")
+
+    # Page slider — vertical, to the right of the sources axis
+    ax_pg_area.axis("off"); pg_pos = ax_pg_area.get_position()
+    ax_pg_sl = fig.add_axes([pg_pos.x0 + pg_pos.width * 0.15,
+                             pg_pos.y0 + pg_pos.height * 0.05,
+                             pg_pos.width * 0.70, pg_pos.height * 0.90])
+    sl_page = Slider(ax_pg_sl, "Page", 0, max(1, n_pages - 1),
+                     valinit=0, valstep=1, color="#95A5A6",
+                     orientation='vertical')
+    # Invert so page 0 sits at the TOP (matching the first components shown at the
+    # top of the sources axis); without this the slider feels backwards.
+    ax_pg_sl.invert_yaxis()
+
     threshold_after_id = None
     active_slider = {"name": None}
+    state["viewer_figs"] = []
+    state["erd_fig"]     = None
 
     def current_n_pages(): return int(np.ceil(n_comp / state["n_visible"]))
     def refresh_page_slider():
         pages = current_n_pages(); state["page"] = min(state["page"], pages - 1)
-        sl_page.valmax = max(1, pages - 1); ax_pg_sl.set_xlim(sl_page.valmin, sl_page.valmax)
+        sl_page.valmax = max(1, pages - 1)
+        # Vertical + inverted: high value at bottom, valmin (=page 0) at top
+        try: ax_pg_sl.set_ylim(sl_page.valmax, sl_page.valmin)
+        except Exception: pass
     def on_page_change(val): state["page"] = min(int(round(val)), current_n_pages() - 1); draw_info(); fig.canvas.draw_idle()
     def set_time_start(val, redraw=True):
         max_start = max(0.0, raw_filt.times[-1] - state["time_window"])
@@ -1903,11 +2066,38 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
             if annotate: ax.text(onset, 0.98, desc, transform=trans, fontsize=6, color=color, rotation=90, va="top", ha="right", alpha=0.85)
 
     def update_source_layout():
-        bbox = outer[1].get_position(fig); nav_h = bbox.height * 0.055; gap = bbox.height * 0.004
-        label_w = min(0.16, bbox.width * 0.18); src_x0 = bbox.x0 + label_w
-        ax_nav.set_position([bbox.x0, bbox.y0, bbox.width, nav_h])
-        ax_sources.set_position([src_x0, bbox.y0 + nav_h + gap, bbox.width - label_w, bbox.height - nav_h - gap])
-        nav_pos = ax_nav.get_position(); ax_pg_sl.set_position([nav_pos.x0 + nav_pos.width * 0.3, nav_pos.y0, nav_pos.width * 0.4, nav_pos.height])
+        bbox = outer[1].get_position(fig)
+        nav_h   = bbox.height * 0.055        # horizontal time slider strip (bottom)
+        pg_w    = bbox.width  * 0.045        # vertical page slider strip (right)
+        # Larger vertical gap so the sources' x-axis tick numbers have room
+        # to draw without being hidden by the time slider underneath.
+        gap_v   = bbox.height * 0.045
+        gap_h   = bbox.width  * 0.004
+        label_w = min(0.16, bbox.width * 0.18)
+        src_x0  = bbox.x0 + label_w
+        src_y0  = bbox.y0 + nav_h + gap_v
+        src_h   = bbox.height - nav_h - gap_v
+        src_w   = bbox.width  - label_w - pg_w - gap_h
+
+        ax_nav.set_position([bbox.x0, bbox.y0, bbox.width - pg_w - gap_h, nav_h])
+        ax_pg_area.set_position([bbox.x0 + bbox.width - pg_w, src_y0, pg_w, src_h])
+        ax_sources.set_position([src_x0, src_y0, src_w, src_h])
+
+        # Time slider widget:
+        #   • horizontally aligned with the signal data area (starts at src_x0)
+        #   • shorter than the full strip and anchored at the bottom of the strip,
+        #     so its top edge sits well below the sources x-tick labels.
+        nav_pos = ax_nav.get_position()
+        ax_time_sl.set_position([
+            src_x0,
+            nav_pos.y0,
+            src_w * 0.92,
+            nav_pos.height * 0.65,
+        ])
+        pg_pos = ax_pg_area.get_position()
+        ax_pg_sl.set_position([pg_pos.x0 + pg_pos.width * 0.15,
+                               pg_pos.y0 + pg_pos.height * 0.05,
+                               pg_pos.width * 0.70, pg_pos.height * 0.90])
 
     def style_threshold_slider(slider, ax, bad_scores, thresh, higher_is_bad):
         ax.set_facecolor("#F2F2F2")
@@ -1940,9 +2130,38 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
         ax_hist.legend(fontsize=7, loc="upper left"); ax_hist.tick_params(labelsize=7); ax_hist.grid(axis="y", alpha=0.3); style_sliders()
 
     def draw_info():
-        ax_info.clear(); ax_info.axis("off"); excl, eog_i, mus_i = state.get("excl", []), state.get("eog_i", []), state.get("mus_i", [])
-        lines = [f"Total excluded : {len(excl)}  / {n_comp}", f"  EOG          : {len(eog_i)}", f"  Muscle       : {len(mus_i)}", f"  Manual extra : {len(manual_extra)}", "", f"Page {state['page']+1} / {current_n_pages()}", f"Visible sources: {state['n_visible']}", f"Components {state['page']*state['n_visible']}-{min((state['page']+1)*state['n_visible'], n_comp)-1}", f"Time window    : {state['time_window']:.1f} s", f"Vertical zoom  : {state['y_scale']:.2f}x"]
-        ax_info.text(0.05, 0.95, "\n".join(lines), transform=ax_info.transAxes, fontsize=9, verticalalignment="top", fontfamily="monospace", bbox=dict(boxstyle="round", fc="white", ec="#CCCCCC", alpha=0.8))
+        ax_info.clear(); ax_info.axis("off")
+        excl  = state.get("excl",  [])
+        eog_i = state.get("eog_i", [])
+        mus_i = state.get("mus_i", [])
+        # How many of each category are *actually* in the final exclusion list
+        # (i.e. survived `manual_kept` overrides). Sum of these three lines
+        # equals `Total excluded` (up to EOG/Muscle overlap, which we surface).
+        kept_set      = set(manual_kept)
+        excl_set      = set(excl)
+        eog_in_final  = sorted(set(eog_i) - kept_set)
+        mus_in_final  = sorted(set(mus_i) - kept_set)
+        both_in_final = sorted(set(eog_in_final) & set(mus_in_final))
+        lines = [
+            f"Total excluded : {len(excl)} / {n_comp}",
+            f"  EOG (auto)   : {len(eog_in_final)}  (auto detected: {len(eog_i)})",
+            f"  Muscle (auto): {len(mus_in_final)}  (auto detected: {len(mus_i)})",
+            f"  Manual added : {len(manual_extra)}",
+            f"  User-kept    : {len(manual_kept)}  (override auto)",
+            f"  EOG∩Muscle   : {len(both_in_final)}  (counted once in Total)",
+            "",
+            f"Page {state['page']+1} / {current_n_pages()}",
+            f"Visible sources: {state['n_visible']}",
+            f"Components {state['page']*state['n_visible']}-"
+            f"{min((state['page']+1)*state['n_visible'], n_comp)-1}",
+            f"Time window    : {state['time_window']:.1f} s",
+            f"Vertical zoom  : {state['y_scale']:.2f}x",
+        ]
+        ax_info.text(0.05, 0.95, "\n".join(lines),
+                     transform=ax_info.transAxes, fontsize=9,
+                     verticalalignment="top", fontfamily="monospace",
+                     bbox=dict(boxstyle="round", fc="white",
+                               ec="#CCCCCC", alpha=0.8))
 
     def draw_sources():
         page, n_vis = state["page"], state["n_visible"]; start_i = page * n_vis; end_i = min(start_i + n_vis, n_comp); shown = end_i - start_i
@@ -1969,21 +2188,38 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
         ax_sources.set_xlabel("Time (s)", fontsize=7); ax_sources.tick_params(axis="x", labelsize=6); ax_sources.tick_params(axis="y", length=0, pad=10)
         ax_sources.grid(axis="x", alpha=0.15); [s.set_visible(False) for s in [ax_sources.spines["top"], ax_sources.spines["right"], ax_sources.spines["left"]]]
 
+    def _recompute_exclusions():
+        """
+        Always recompute the final exclusion list from scratch:
+
+            final = (auto_excl ∪ manual_extra) − manual_kept
+
+        where `auto_excl` comes from the EOG/EMG threshold scan and the two
+        manual lists are populated by left-clicks on the source axis.
+        Sets `ica.exclude`, `state["excl"]`, `state["eog_i"]`, `state["mus_i"]`.
+        """
+        nonlocal eog_scores
+        if eog_scores is None:
+            print("  Computing EOG correlation scores once ...", flush=True)
+            eog_scores = compute_eog_scores(ica, raw_filt, ch_names)
+        auto_excl, eog_i, mus_i = compute_exclusions(
+            ica, raw_filt,
+            state["muscle_thresh"], state["eog_thresh"], ch_names,
+            manual_extra=[],            # don't double-count here
+            eog_scores=eog_scores, emg_scores=slopes,
+        )
+        final = sorted((set(auto_excl) - set(manual_kept)) | set(manual_extra))
+        state["excl"], state["eog_i"], state["mus_i"] = final, eog_i, mus_i
+        ica.exclude = final
+
     def full_redraw():
-        nonlocal eog_scores, threshold_after_id
-        threshold_after_id = None; params = (state["muscle_thresh"], state["eog_thresh"])
-        if state.get("last_params") != params:
-            if eog_scores is None: print("  Computing EOG correlation scores once ...", flush=True); eog_scores = compute_eog_scores(ica, raw_filt, ch_names)
-            excl, eog_i, mus_i = compute_exclusions(ica, raw_filt, state["muscle_thresh"], state["eog_thresh"], ch_names, manual_extra, eog_scores=eog_scores, emg_scores=slopes)
-            state["excl"], state["eog_i"], state["mus_i"], state["last_params"], ica.exclude = excl, eog_i, mus_i, params, excl
+        nonlocal threshold_after_id
+        threshold_after_id = None
+        _recompute_exclusions()
         draw_histogram(); draw_info(); draw_sources(); fig.canvas.draw_idle()
 
     def histogram_only_redraw():
-        nonlocal eog_scores; params = (state["muscle_thresh"], state["eog_thresh"])
-        if state.get("last_params") != params:
-            if eog_scores is None: eog_scores = compute_eog_scores(ica, raw_filt, ch_names)
-            excl, eog_i, mus_i = compute_exclusions(ica, raw_filt, state["muscle_thresh"], state["eog_thresh"], ch_names, manual_extra, eog_scores=eog_scores, emg_scores=slopes)
-            state["excl"], state["eog_i"], state["mus_i"], ica.exclude = excl, eog_i, mus_i, excl
+        _recompute_exclusions()
         draw_histogram(); draw_info(); fig.canvas.draw_idle()
 
     def on_eog_change(val): state["eog_thresh"] = round(val, 2); schedule_threshold_redraw()
@@ -2007,30 +2243,170 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
         elif slider_name == "time": redraw_sources_after_slider_release()
         elif slider_name == "page": draw_sources(); draw_info(); fig.canvas.draw_idle()
 
+    # ── click-to-exclude on the sources axis ──────────────────────────────
+    def _visible_offsets():
+        """Return ([row_offset,...], [comp_idx,...]) for the currently visible page."""
+        page, n_vis = state["page"], state["n_visible"]
+        start_i = page * n_vis
+        end_i   = min(start_i + n_vis, n_comp)
+        shown   = end_i - start_i
+        if shown <= 0:
+            return [], []
+        offs = list(np.arange(shown - 1, -1, -1, dtype=float))
+        return offs, list(range(start_i, end_i))
+
+    def _component_from_click(event):
+        """Map a click to a component index. Accepts clicks on the trace area
+        AND on the y-tick label margin to the left of `ax_sources`."""
+        # Case 1: click inside the trace axes
+        if event.inaxes is ax_sources and event.ydata is not None:
+            offs, comps = _visible_offsets()
+            if not offs:
+                return None
+            idx = int(np.argmin(np.abs(np.array(offs) - event.ydata)))
+            if abs(offs[idx] - event.ydata) > 0.6:
+                return None
+            return comps[idx]
+        # Case 2: click in the y-tick label margin (event.inaxes is None there)
+        if event.x is None or event.y is None:
+            return None
+        try:
+            ax_bbox = ax_sources.get_window_extent()
+        except Exception:
+            return None
+        # Vertically must be within the sources axis
+        if not (ax_bbox.y0 <= event.y <= ax_bbox.y1):
+            return None
+        # Horizontally must be in the label margin (up to ~250 px left of axis)
+        if not (ax_bbox.x0 - 250 <= event.x < ax_bbox.x0):
+            return None
+        try:
+            _, y_data = ax_sources.transData.inverted().transform((event.x, event.y))
+        except Exception:
+            return None
+        offs, comps = _visible_offsets()
+        if not offs:
+            return None
+        idx = int(np.argmin(np.abs(np.array(offs) - y_data)))
+        if abs(offs[idx] - y_data) > 0.6:
+            return None
+        return comps[idx]
+
+    def on_source_click(event):
+        """
+        Left-click toggles a component's exclusion.
+
+        Logic:
+          - If currently EXCLUDED (auto or manual): force-keep
+              (remove from manual_extra if present, add to manual_kept)
+          - If currently INCLUDED: force-exclude as [manual]
+              (add to manual_extra, remove from manual_kept if present)
+        """
+        if event.button != 1:
+            return
+        comp = _component_from_click(event)
+        if comp is None:
+            return
+
+        currently_excluded = comp in set(state.get("excl", []))
+        if currently_excluded:
+            if comp in manual_extra: manual_extra.remove(comp)
+            if comp not in manual_kept: manual_kept.append(comp)
+            print(f"  Manual: ICA{comp:03d} → kept")
+        else:
+            if comp not in manual_extra: manual_extra.append(comp)
+            if comp in manual_kept: manual_kept.remove(comp)
+            print(f"  Manual: ICA{comp:03d} → excluded [manual]")
+
+        full_redraw()
+
     def on_key(event):
         key = (event.key or "").lower()
-        if key in ("right", "shift+right"): step = state["time_window"] * (0.5 if key.startswith("shift") else 0.2); set_time_start(state["time_start"] + step)
-        elif key in ("left", "shift+left"): step = state["time_window"] * (0.5 if key.startswith("shift") else 0.2); set_time_start(state["time_start"] - step)
-        elif key in ("+", "=", "ctrl+right"): set_time_window(state["time_window"] / 1.25); draw_info()
-        elif key in ("-", "_", "ctrl+left"): set_time_window(state["time_window"] * 1.25); draw_info()
-        elif key == "pageup": set_visible_sources(state["n_visible"] + 2)
-        elif key == "pagedown": set_visible_sources(state["n_visible"] - 2)
-        elif key == "ctrl+up": state["y_scale"] = min(state["y_scale"] * 1.25, 8.0); draw_sources(); draw_info(); fig.canvas.draw_idle()
-        elif key == "ctrl+down": state["y_scale"] = max(state["y_scale"] / 1.25, 0.125); draw_sources(); draw_info(); fig.canvas.draw_idle()
-        elif key == "up": set_page(state["page"] - 1)
-        elif key == "down": set_page(state["page"] + 1)
-        elif key == "home": set_time_start(0.0)
-        elif key == "end": set_time_start(raw_filt.times[-1])
-        elif key in ("0", "r"): state["time_window"], state["y_scale"], state["n_visible"] = 10.0, 1.0, N_PER_PAGE_DEFAULT; refresh_page_slider(); refresh_time_slider(); set_time_start(state["time_start"]); draw_info()
+        # Left / Right : navigate in time
+        if key == "right":
+            set_time_start(state["time_start"] + state["time_window"] * 0.2)
+        elif key == "left":
+            set_time_start(state["time_start"] - state["time_window"] * 0.2)
+        # Up / Down : navigate sources (paging)
+        elif key == "up":
+            set_page(state["page"] - 1)
+        elif key == "down":
+            set_page(state["page"] + 1)
+        # Shift + Up / Down : add or remove one visible source per page
+        elif key == "shift+up":
+            set_visible_sources(state["n_visible"] + 1)
+        elif key == "shift+down":
+            set_visible_sources(state["n_visible"] - 1)
+        # + / - : amplitude (vertical) zoom of source traces
+        elif key in ("+", "="):
+            state["y_scale"] = min(state["y_scale"] * 1.25, 8.0)
+            draw_sources(); draw_info(); fig.canvas.draw_idle()
+        elif key in ("-", "_"):
+            state["y_scale"] = max(state["y_scale"] / 1.25, 0.125)
+            draw_sources(); draw_info(); fig.canvas.draw_idle()
+        # Convenience extras (kept silent, not advertised in UI)
+        elif key == "home":
+            set_time_start(0.0)
+        elif key == "end":
+            set_time_start(raw_filt.times[-1])
+        elif key in ("0", "r"):
+            state["time_window"], state["y_scale"], state["n_visible"] = (
+                10.0, 1.0, N_PER_PAGE_DEFAULT
+            )
+            refresh_page_slider(); refresh_time_slider()
+            set_time_start(state["time_start"]); draw_info()
 
     def on_confirm(event):
-        print(f"\n  Confirmed - {len(ica.exclude)} component(s) excluded: {sorted(ica.exclude)}"); plt.close(fig)
-        raw_clean = raw_orig.copy(); ica.apply(raw_clean, verbose=False)
-        event_id = {"Thumb": 1, "Index": 2, "Middle": 3, "Pinky": 4, "TrialEnd": 9}
-        launch_viewer(raw_orig, raw_clean, subj_id, task, session, nclass, model_type, event_id, ica)
+        # Close previously-opened viewer windows (if any) so we don't stack them
+        for vf in state.get("viewer_figs", []):
+            try: plt.close(vf)
+            except Exception: pass
+        state["viewer_figs"] = []
 
-    sl_eog.on_changed(on_eog_change); sl_mus.on_changed(on_mus_change); btn_confirm.on_clicked(on_confirm)
-    fig.canvas.mpl_connect("key_press_event", on_key); fig.canvas.mpl_connect("button_press_event", on_slider_press); fig.canvas.mpl_connect("button_release_event", on_slider_release)
+        print(f"\n  Confirmed - {len(ica.exclude)} component(s) excluded: {sorted(ica.exclude)}")
+        raw_clean = raw_orig.copy(); ica.apply(raw_clean, verbose=False)
+        print("  Opening RAW vs ICA-cleaned viewers (inspector stays open) ...")
+        try:
+            state["viewer_figs"] = _open_signal_viewers_nonblocking(
+                raw_orig, raw_clean, subj_id, task, session, nclass, model_type, ica
+            )
+        except Exception as e:
+            print(f"  [ERROR] Could not open viewers: {e}")
+        try: fig.canvas.draw_idle()
+        except Exception: pass
+
+    def on_show_erd(event):
+        # Close previous ERD figure so consecutive clicks don't pile windows
+        prev = state.get("erd_fig")
+        if prev is not None:
+            try: plt.close(prev)
+            except Exception: pass
+            state["erd_fig"] = None
+
+        print(f"\n  Computing ERD (Before vs After ICA) with current exclusion: "
+              f"{sorted(ica.exclude)} — please wait ...")
+        raw_clean = raw_orig.copy()
+        ica.apply(raw_clean, verbose=False)
+        try:
+            erd_fig = _compute_erd_for_inspector(
+                raw_orig, raw_clean, task, session, nclass, model_type
+            )
+            state["erd_fig"] = erd_fig
+            if erd_fig is None:
+                print("  [WARN] ERD figure was not created.")
+        except Exception as e:
+            print(f"  [ERROR] ERD computation failed: {e}")
+            import traceback; traceback.print_exc()
+        try: fig.canvas.draw_idle()
+        except Exception: pass
+
+    sl_eog.on_changed(on_eog_change); sl_mus.on_changed(on_mus_change)
+    btn_confirm.on_clicked(on_confirm); btn_erd.on_clicked(on_show_erd)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("button_press_event", on_slider_press)
+    fig.canvas.mpl_connect("button_release_event", on_slider_release)
+    # Left-click on a source trace or channel name to toggle exclusion
+    fig.canvas.mpl_connect("button_press_event", on_source_click)
     print("  Preparing inspector window ...", flush=True); _reload_src_data(); full_redraw(); fig.canvas.draw(); fig.canvas.flush_events(); plt.figure(fig.number); plt.pause(0.1); bring_to_front(); plt.show(block=True)
     return ica.exclude
 

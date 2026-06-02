@@ -32,6 +32,8 @@ from Functions import (
     get_folder, get_offline_folder,
     get_standard_args, get_offline_args,
     get_ica_fif_path,
+    get_ica_folder,
+    save_ica_cleaned_mat_files,
 )
 
 # Force the matplotlib browser backend (not mne-qt-browser): the in-place
@@ -44,15 +46,18 @@ except Exception as _e:
 # ── tuning constants ──────────────────────────────────────────────────────────
 _PREVIEW_SECS   = 10.0   # seconds shown in signal window — short = fast ICA apply
 _N_SIG_CHANNELS = 20     # channels visible in MNE's signal browser
+_SPECTRUM_FMAX  = 60.0  # upper edge of the dedicated spectrum window (Hz)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _load_raw(folder):
+    """Return (filtered_raw, mat_files) for the given source folder."""
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
         raise FileNotFoundError(f"No .mat files in {folder}")
     raw, _, _ = build_raw_from_mat_files(mat_files)
-    return raw.filter(1.0, None, verbose=False)
+    raw_filt = raw.filter(1.0, None, verbose=False)
+    return raw_filt, mat_files
 
 
 def _is_trace_axes(ax):
@@ -163,10 +168,14 @@ def _mne_force_redraw(fig):
 class ICAInspector:
     """Two-window ICA inspector. Both windows are MNE native browsers."""
 
-    def __init__(self, ica: mne.preprocessing.ICA, raw: mne.io.BaseRaw):
-        self.ica    = ica
-        self.raw    = raw
-        self.n_comp = ica.n_components_
+    def __init__(self, ica: mne.preprocessing.ICA, raw: mne.io.BaseRaw,
+                 mat_files=None, save_folder=None):
+        self.ica         = ica
+        self.raw         = raw
+        self.n_comp      = ica.n_components_
+        self.mat_files   = mat_files
+        self.save_folder = save_folder
+        self._saved      = False
 
         # Preview slice: short enough that ica.apply() runs in a few tens of ms
         t_end = min(raw.times[-1], _PREVIEW_SECS)
@@ -215,7 +224,30 @@ class ICAInspector:
         # ── 3. Wire events on the sources figure ────────────────────────────
         self.src_fig.canvas.mpl_connect('button_press_event', self._on_press)
 
+        # Save the *_ICA.mat files when either window is closed.
+        self.src_fig.canvas.mpl_connect('close_event', self._on_close)
+        self.sig_fig.canvas.mpl_connect('close_event', self._on_close)
+
         plt.show(block=True)
+
+    # ── save on close ─────────────────────────────────────────────────────────
+
+    def _on_close(self, event):
+        """Save cleaned .mat files the first time any window is closed."""
+        if self._saved:
+            return
+        if not self.mat_files or not self.save_folder:
+            return
+        self._saved = True
+        print(f"\n  [CONFIRM] Saving {len(self.ica.exclude)} component(s) removed "
+              f"({self.ica.exclude}) to:\n    {self.save_folder}")
+        try:
+            save_ica_cleaned_mat_files(
+                self.ica, self.raw, self.mat_files, self.save_folder
+            )
+            print("  Done.")
+        except Exception as e:
+            print(f"  [ERROR] Save failed: {e}")
 
     # ── signal browser title ──────────────────────────────────────────────────
 
@@ -242,7 +274,7 @@ class ICAInspector:
         if event.button == 3:
             # Right-click → open MNE properties panel for this component
             print(f'  Opening properties for ICA{comp:03d} …')
-            self.ica.plot_properties(self.raw, picks=[comp])
+            self._open_properties(comp)
             return
 
         if event.button == 1:
@@ -251,6 +283,65 @@ class ICAInspector:
             timer = self.src_fig.canvas.new_timer(interval=80)
             timer.add_callback(self._after_left_click, comp, timer)
             timer.start()
+
+    def _open_properties(self, comp):
+        """
+        Right-click on a source → open the dedicated spectrum window only.
+
+        MNE's `plot_sources` figure has its own native right-click handler
+        that already opens `ica.plot_properties()` for the clicked
+        component. Calling it from here too would pop a second copy of
+        that same window (the "duplicate original" the user saw). So we
+        leave the properties view to MNE and add only the big spectrum
+        plot that needs more vertical space than plot_properties gives.
+        """
+        try:
+            self._open_spectrum_window(comp)
+        except Exception as e:
+            print(f"  [warn] spectrum window failed: {e}")
+
+    def _open_spectrum_window(self, comp):
+        """Pop a large standalone figure showing component `comp`'s PSD."""
+        import scipy.signal as _sp_signal
+        sources = self.ica.get_sources(self.raw)
+        sfreq   = float(sources.info['sfreq'])
+        src     = sources.get_data()[comp]                 # (n_times,)
+
+        # Welch PSD — 2-second windows for clean low-frequency resolution
+        nperseg     = int(min(sfreq * 2.0, len(src)))
+        freqs, psd  = _sp_signal.welch(src, fs=sfreq, nperseg=nperseg)
+        mask        = freqs <= _SPECTRUM_FMAX
+        freqs, psd  = freqs[mask], psd[mask]
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+        try:
+            fig.canvas.manager.set_window_title(
+                f'ICA{comp:03d} — Power Spectrum'
+            )
+        except Exception:
+            pass
+
+        # Raw power on a log-scaled y-axis: spreads the ~4-orders-of-magnitude
+        # variation of EEG across the figure so alpha/beta peaks and the 1/f
+        # background are both clearly readable.
+        ax.plot(freqs, psd, color='#2E5984', linewidth=1.5)
+        ax.set_yscale('log')
+        ax.set_xlabel('Frequency (Hz)', fontsize=12)
+        ax.set_ylabel('Power (V²/Hz)',  fontsize=12)
+        ax.set_title(f'ICA{comp:03d} — Power Spectrum',
+                     fontsize=13, fontweight='bold')
+        ax.set_xlim(0, _SPECTRUM_FMAX)
+        ax.grid(True, which='both', alpha=0.35, linestyle='--')
+        ax.tick_params(labelsize=11)
+        fig.tight_layout()
+
+        # Force the new Tk window to actually paint inside the running event loop
+        try:
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+            plt.pause(0.001)
+        except Exception:
+            pass
 
     def _after_left_click(self, comp, timer):
         # Stop the (otherwise repeating) timer
@@ -311,29 +402,35 @@ def sources_online(subj, sess, ncl, task, model):
     print("=" * 60)
     print(f"  ICA Sources: S{subj:02} Sess{sess:02} | {task} {ncl}-class | {model}")
     print("=" * 60)
-    raw  = _load_raw(get_folder(subj, task, sess, ncl, model))
-    path = get_ica_fif_path(subj, task, sess, ncl, model)
+    folder           = get_folder(subj, task, sess, ncl, model)
+    raw, mat_files   = _load_raw(folder)
+    save_folder      = get_ica_folder(folder)
+    path             = get_ica_fif_path(subj, task, sess, ncl, model)
     if not os.path.exists(path):
         raise FileNotFoundError(f"No cached ICA at {path}\nRun viz_inspector.py first.")
     ica = mne.preprocessing.read_ica(path)
     print(f"  Loaded {ica.n_components_} components from {path}")
     print("  Left-click: exclude/include.  Right-click: open properties.")
-    ICAInspector(ica, raw)
+    print(f"  Cleaned files will be saved on window close to:\n    {save_folder}")
+    ICAInspector(ica, raw, mat_files=mat_files, save_folder=save_folder)
 
 
 def sources_offline(subj, task):
     print("=" * 60)
     print(f"  ICA Sources: S{subj:02} | {task} (Offline)")
     print("=" * 60)
-    raw = _load_raw(get_offline_folder(subj, task))
+    folder           = get_offline_folder(subj, task)
+    raw, mat_files   = _load_raw(folder)
     raw.notch_filter(np.arange(60, 501, 60))
-    path = get_ica_fif_path(subj, task)
+    save_folder      = get_ica_folder(folder)
+    path             = get_ica_fif_path(subj, task)
     if not os.path.exists(path):
         raise FileNotFoundError(f"No cached ICA at {path}\nRun viz_inspector.py first.")
     ica = mne.preprocessing.read_ica(path)
     print(f"  Loaded {ica.n_components_} components from {path}")
     print("  Left-click: exclude/include.  Right-click: open properties.")
-    ICAInspector(ica, raw)
+    print(f"  Cleaned files will be saved on window close to:\n    {save_folder}")
+    ICAInspector(ica, raw, mat_files=mat_files, save_folder=save_folder)
 
 
 def main():

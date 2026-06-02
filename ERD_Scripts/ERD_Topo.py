@@ -50,17 +50,21 @@ from Functions import (
 from config import RESULTS_ROOT, MORLET_N_CYCLES, ALL_SUBJECTS
 
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants ─ paper: Ding et al. 2025, "Electrophysiological analysis" ─────
+# Pipeline (per the paper):
+#   CAR → resample 100 Hz → bandpass 2–30 Hz → ICA → segment −2 s..end
+#   → reject trials with std > 20 µV → Morlet (alpha 8–13, beta 13–30)
+#   → task window 0.5..end, baseline −1..0, ERD = (Pc − Rc) / Rc × 100 %
 SFREQ_DS   = 100
 FILT_LO    = 2.0
-FILT_HI    = 45.0   # wide enough for Fullband (4-40 Hz) and Alpha/Beta
+FILT_HI    = 30.0   # paper-exact: bandpass 2–30 Hz
 TMIN             = -2.0
 TMAX_ONLINE      = 3.0
 TMAX_OFFLINE     = 5.0
 BASELINE         = (-1.0, 0.0)
 TASK_WIN_ONLINE  = (0.5, 3.0)
 TASK_WIN_OFFLINE = (0.5, 5.0)
-STD_THRESH       = 20e-6   # 20 µV — mean std across channels (Ding et al. 2025)
+STD_THRESH       = 20e-6   # 20 µV — applied to MEAN-across-channels of per-channel std
 
 FINGERS = {
     2: [("Thumb", 1), ("Pinky", 4)],
@@ -68,8 +72,10 @@ FINGERS = {
 }
 FINGERS_OFFLINE = [("Thumb", 1), ("Index", 2), ("Middle", 3), ("Pinky", 4)]
 
+# Fullband is an analysis-side extension not present in the paper. Its upper
+# bound is clamped to 30 Hz so it stays inside the paper-exact 2–30 Hz filter.
 BANDS_CONFIG = {
-    "Fullband": [(4,  40, "Fullband (4-40 Hz)")],
+    "Fullband": [(4,  30, "Fullband (4-30 Hz)")],
     "Alpha":    [(8,  13, "Alpha (8-13 Hz)")],
     "Beta":     [(13, 30, "Beta (13-30 Hz)")],
 }
@@ -161,12 +167,23 @@ def build_epochs(raw, finger_pairs, tmax=TMAX_ONLINE):
         baseline=None, preload=True, verbose=False,
     )
 
-    # Reject trials with global std (all channels × time) > 20 µV (Ding et al. 2025)
-    data = epochs.get_data()                      # (n_epochs, n_chan, n_times)
-    bad  = data.reshape(len(data), -1).std(axis=1) > STD_THRESH
+    # Trial rejection (Ding et al. 2025):
+    #   "Trials with a standard deviation above 20 µV were excluded"
+    #
+    # We interpret this as a *trial-level* std: compute std along time per
+    # channel, then take the MEAN across channels (single number per trial).
+    # Using `max` would reject almost every Before-ICA trial since raw EEG
+    # routinely has a few electrodes (frontal/EOG) well above 20 µV that
+    # ICA is meant to clean. The mean preserves trials where overall
+    # variability is reasonable even if one electrode is noisy.
+    data        = epochs.get_data()                        # (n_epochs, n_chan, n_times)
+    std_per_ch  = data.std(axis=2)                         # (n_epochs, n_chan)
+    trial_std   = std_per_ch.mean(axis=1)                  # mean across channels
+    bad         = trial_std > STD_THRESH
     if bad.sum():
-        print(f"  Rejected {int(bad.sum())} noisy trial(s)  "
-              f"({len(epochs) - int(bad.sum())} remaining)")
+        print(f"  Rejected {int(bad.sum())} noisy trial(s) "
+              f"(mean channel std > {STD_THRESH * 1e6:.0f} µV)  "
+              f"-> {len(epochs) - int(bad.sum())} remaining")
     return epochs[~bad]
 
 
@@ -371,14 +388,20 @@ def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
 
     try:
         raw    = load_fn()
-        epochs = build_epochs_no_reject(raw, finger_pairs, tmax=tmax)
+        # Apply the same 20 µV noisy-trial rejection on the Before-ICA path
+        # so that Before-vs-After topomaps are computed on the same kind of
+        # filtered trials (otherwise pre-ICA outliers leak into the topomap).
+        epochs = build_epochs(raw, finger_pairs, tmax=tmax)
+        if len(epochs) == 0:
+            print("\n[ERROR] All Before-ICA trials rejected (mean channel std > 20 µV).")
+            sys.exit(1)
         data = epochs.get_data()
         print(f"  Signal: mean_abs={np.abs(data).mean()*1e6:.2f} µV  std={data.std()*1e6:.2f} µV")
     except Exception as e:
         print(f"\n[ERROR] {e}")
         sys.exit(1)
 
-    print(f"\n  Epochs: {len(epochs)}")
+    print(f"\n  Epochs (Before ICA, with rejection): {len(epochs)}")
     for eid, name in {eid: n for n, eid in finger_pairs}.items():
         print(f"    {name}: {(epochs.events[:, 2] == eid).sum()}")
 
@@ -390,7 +413,7 @@ def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
             print("\n  [WARN] All ICA epochs rejected — After-ICA row will show 'no data'")
             epochs_ica = None
         else:
-            print(f"\n  ICA epochs kept: {len(epochs_ica)}")
+            print(f"\n  Epochs (After ICA): {len(epochs_ica)}")
     except FileNotFoundError:
         print("\n  [INFO] ICA data not found — After-ICA row will show 'no data'")
         print("         Run ICA_Scripts/clean_ICA.py first.")
