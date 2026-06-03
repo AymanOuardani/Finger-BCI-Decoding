@@ -64,7 +64,7 @@ TMAX_OFFLINE     = 5.0
 BASELINE         = (-1.0, 0.0)
 TASK_WIN_ONLINE  = (0.5, 3.0)
 TASK_WIN_OFFLINE = (0.5, 5.0)
-STD_THRESH       = 20e-6   # 20 µV — applied to MEAN-across-channels of per-channel std
+STD_THRESH       = 20e-6   # 20 µV — single trial-level std (all channels × all samples)
 
 FINGERS = {
     2: [("Thumb", 1), ("Pinky", 4)],
@@ -167,23 +167,25 @@ def build_epochs(raw, finger_pairs, tmax=TMAX_ONLINE):
         baseline=None, preload=True, verbose=False,
     )
 
-    # Trial rejection (Ding et al. 2025):
+    # Trial rejection — paper-literal (Ding et al. 2025):
     #   "Trials with a standard deviation above 20 µV were excluded"
-    #
-    # We interpret this as a *trial-level* std: compute std along time per
-    # channel, then take the MEAN across channels (single number per trial).
-    # Using `max` would reject almost every Before-ICA trial since raw EEG
-    # routinely has a few electrodes (frontal/EOG) well above 20 µV that
-    # ICA is meant to clean. The mean preserves trials where overall
-    # variability is reasonable even if one electrode is noisy.
-    data        = epochs.get_data()                        # (n_epochs, n_chan, n_times)
-    std_per_ch  = data.std(axis=2)                         # (n_epochs, n_chan)
-    trial_std   = std_per_ch.mean(axis=1)                  # mean across channels
-    bad         = trial_std > STD_THRESH
+    # Singular "a standard deviation" → one number per trial = the std of
+    # the whole trial (all channels × all time samples, flattened). Any
+    # trial whose overall std exceeds 20 µV is dropped, exactly as the
+    # paper describes — no per-channel aggregation, no extra thresholds.
+    data       = epochs.get_data()                          # (n_epochs, n_chan, n_times)
+    trial_std  = data.reshape(len(data), -1).std(axis=1)    # one std per trial
+    bad        = trial_std > STD_THRESH
     if bad.sum():
+        worst = float(trial_std.max()) * 1e6
         print(f"  Rejected {int(bad.sum())} noisy trial(s) "
-              f"(mean channel std > {STD_THRESH * 1e6:.0f} µV)  "
-              f"-> {len(epochs) - int(bad.sum())} remaining")
+              f"(trial std > {STD_THRESH * 1e6:.0f} µV; worst trial std={worst:.1f} µV)"
+              f"  -> {len(epochs) - int(bad.sum())} remaining")
+    else:
+        worst = float(trial_std.max()) * 1e6 if len(trial_std) else 0.0
+        print(f"  No trials rejected "
+              f"(worst trial std = {worst:.1f} µV, threshold = "
+              f"{STD_THRESH * 1e6:.0f} µV)")
     return epochs[~bad]
 
 
@@ -230,7 +232,7 @@ def plot_erd_topo(erd_per_band, finger_names, info, title, save_path=None):
     )
     fig.subplots_adjust(top=0.88, right=0.88)
 
-    vmin, vmax = -0.5, 0.5
+    vmin, vmax = -0.5, 0.0
 
     for r, band_label in enumerate(band_labels):
         for c, fname in enumerate(finger_names):
@@ -251,7 +253,7 @@ def plot_erd_topo(erd_per_band, finger_names, info, title, save_path=None):
             mne.viz.plot_topomap(
                 erd, info,
                 axes=ax,
-                cmap="RdBu_r",
+                cmap="Blues_r",          # dark blue at vmin, white at vmax
                 vlim=(vmin, vmax),
                 contours=0,
                 extrapolate="head",
@@ -266,10 +268,10 @@ def plot_erd_topo(erd_per_band, finger_names, info, title, save_path=None):
     # Shared colorbar — fixed position so it doesn't fight tight_layout
     cbar_ax = fig.add_axes([0.91, 0.15, 0.025, 0.65])
     sm = plt.cm.ScalarMappable(
-        cmap="RdBu_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        cmap="Blues_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm.set_array([])
     cbar = plt.colorbar(sm, cax=cbar_ax, label="ERD (fraction)")
-    ticks = np.linspace(vmin, vmax, 5)
+    ticks = np.linspace(vmin, vmax, 6)
     cbar.set_ticks(ticks)
     cbar.set_ticklabels([f"{t:.2f}" for t in ticks])
 
@@ -313,7 +315,7 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
     )
     fig.subplots_adjust(top=0.88, right=0.88, hspace=0.1)
 
-    vmin, vmax = -0.5, 0.5
+    vmin, vmax = -0.5, 0.0
 
     row_labels = [f"Before ICA\n{band_label}", f"After ICA\n{band_label}"]
     row_dicts  = [erd_raw, erd_ica]
@@ -337,7 +339,7 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
             mne.viz.plot_topomap(
                 erd, info,
                 axes=ax,
-                cmap="RdBu_r",
+                cmap="Blues_r",          # dark blue at vmin, white at vmax
                 vlim=(vmin, vmax),
                 contours=0,
                 extrapolate="head",
@@ -358,10 +360,10 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
 
     cbar_ax = fig.add_axes([0.91, 0.15, 0.025, 0.65])
     sm = plt.cm.ScalarMappable(
-        cmap="RdBu_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        cmap="Blues_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm.set_array([])
     cbar = plt.colorbar(sm, cax=cbar_ax, label="ERD (fraction)")
-    ticks = np.linspace(vmin, vmax, 5)
+    ticks = np.linspace(vmin, vmax, 6)
     cbar.set_ticks(ticks)
     cbar.set_ticklabels([f"{t:.2f}" for t in ticks])
 

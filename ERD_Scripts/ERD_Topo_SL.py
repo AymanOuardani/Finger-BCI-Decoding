@@ -56,16 +56,8 @@ def plot_erd_comparison_sl(erd_raw, erd_ica, band_label, finger_names, info,
     )
     fig.subplots_adjust(top=0.88, right=0.88, hspace=0.1)
 
-    # Dynamic symmetric limits centred at 0
-    all_vals = [v for d in [erd_raw, erd_ica]
-                for v in d.values() if v is not None]
-    if all_vals:
-        abs_max = max(abs(np.nanmin(v)) for v in all_vals)
-        abs_max = max(abs_max, max(abs(np.nanmax(v)) for v in all_vals))
-        abs_max = max(abs_max, 0.5)    # ensure a visible range (values are fractions)
-    else:
-        abs_max = 0.5
-    vmin, vmax = -abs_max, abs_max
+    # Fixed colormap range [-0.5, 0]: 0 → white, -0.5 → dark blue.
+    vmin, vmax = -0.5, 0.0
 
     row_labels = [f"Before ICA\n{band_label}", f"After ICA\n{band_label}"]
     row_dicts  = [erd_raw, erd_ica]
@@ -89,7 +81,7 @@ def plot_erd_comparison_sl(erd_raw, erd_ica, band_label, finger_names, info,
             mne.viz.plot_topomap(
                 erd, info,
                 axes=ax,
-                cmap="RdBu_r",
+                cmap="Blues_r",          # dark blue at vmin, white at vmax
                 vlim=(vmin, vmax),
                 contours=0,
                 extrapolate="head",
@@ -110,10 +102,10 @@ def plot_erd_comparison_sl(erd_raw, erd_ica, band_label, finger_names, info,
 
     cbar_ax = fig.add_axes([0.91, 0.15, 0.025, 0.65])
     sm = plt.cm.ScalarMappable(
-        cmap="RdBu_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        cmap="Blues_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm.set_array([])
-    cbar = plt.colorbar(sm, cax=cbar_ax, label="ERD / ERS (fraction)")
-    ticks = np.linspace(vmin, vmax, 7)
+    cbar = plt.colorbar(sm, cax=cbar_ax, label="ERD (fraction)")
+    ticks = np.linspace(vmin, vmax, 6)
     cbar.set_ticks(ticks)
     cbar.set_ticklabels([f"{t:.2f}" for t in ticks])
 
