@@ -192,7 +192,20 @@ def build_epochs(raw, finger_pairs, tmax=TMAX_ONLINE):
 def compute_band_erd(epoch_data, times, fmin, fmax, task_win=TASK_WIN_ONLINE):
     """
     Morlet TFR → per-finger ERD averaged over trials and band frequencies.
-    Returns (n_chan,) array as fraction (positive = desynchronization).
+    Returns (n_chan,) array as fraction (negative = desynchronization).
+
+    Paper formula (Ding et al. 2025, Eq. 3):
+        ERDc = (Pc - Rc) / Rc × 100 %
+    where
+        Pc = average power in the task window
+        Rc = average baseline power *within each session*
+
+    Key implementation choice: we use a SESSION-LEVEL Rc — i.e. we average
+    the baseline power across ALL trials of this condition before dividing,
+    so Rc is one stable number per (channel, frequency). Dividing per trial
+    by a noisy per-trial Rc could otherwise blow up to +∞ when a single
+    trial's baseline happens to be tiny on one channel — that's why you
+    were seeing +8 ERS spikes on a single subject before this fix.
     """
     freqs    = np.arange(fmin, fmax + 1, dtype=float)
     n_cycles = MORLET_N_CYCLES   # 7 cycles — paper-exact (Ding et al. 2025)
@@ -206,13 +219,21 @@ def compute_band_erd(epoch_data, times, fmin, fmax, task_win=TASK_WIN_ONLINE):
     bl_mask   = (times >= BASELINE[0])  & (times <  BASELINE[1])
     task_mask = (times >= task_win[0])  & (times <= task_win[1])
 
-    Rc  = power[:, :, :, bl_mask  ].mean(axis=-1)   # (n_epochs, n_chan, n_freqs)
-    Pc  = power[:, :, :, task_mask].mean(axis=-1)
+    # Average across BOTH trials (axis 0) AND time (axis -1):
+    #   Pc → mean task-window power per (channel, frequency)
+    #   Rc → mean baseline power per (channel, frequency), session-level
+    Pc = power[:, :, :, task_mask].mean(axis=(0, -1))   # (n_chan, n_freqs)
+    Rc = power[:, :, :, bl_mask  ].mean(axis=(0, -1))   # (n_chan, n_freqs)
 
-    ERD = (Pc - Rc) / (Rc + 1e-12)   # fraction, negative = ERD
-    print(f"    Rc mean={Rc.mean():.4f}  Pc mean={Pc.mean():.4f}  ratio={Pc.mean()/Rc.mean():.3f}")
+    # ERD = (Pc - Rc) / Rc, fraction (negative = desynchronization).
+    # No more per-trial division, so no more exploding ratios.
+    ERD = (Pc - Rc) / (Rc + 1e-12)
 
-    return ERD.mean(axis=(0, 2))   # negative = desynchronization → (n_chan,)
+    print(f"    Rc mean={Rc.mean():.4f}  Pc mean={Pc.mean():.4f}  "
+          f"ERD range=[{ERD.min():+.3f}, {ERD.max():+.3f}]")
+
+    # Average over the band frequencies → (n_chan,)
+    return ERD.mean(axis=-1)
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
