@@ -189,51 +189,11 @@ def build_epochs(raw, finger_pairs, tmax=TMAX_ONLINE):
     return epochs[~bad]
 
 
-def compute_band_erd(epoch_data, times, fmin, fmax, task_win=TASK_WIN_ONLINE):
-    """
-    Morlet TFR → per-finger ERD averaged over trials and band frequencies.
-    Returns (n_chan,) array as fraction (negative = desynchronization).
-
-    Paper formula (Ding et al. 2025, Eq. 3):
-        ERDc = (Pc - Rc) / Rc × 100 %
-    where
-        Pc = average power in the task window
-        Rc = average baseline power *within each session*
-
-    Key implementation choice: we use a SESSION-LEVEL Rc — i.e. we average
-    the baseline power across ALL trials of this condition before dividing,
-    so Rc is one stable number per (channel, frequency). Dividing per trial
-    by a noisy per-trial Rc could otherwise blow up to +∞ when a single
-    trial's baseline happens to be tiny on one channel — that's why you
-    were seeing +8 ERS spikes on a single subject before this fix.
-    """
-    freqs    = np.arange(fmin, fmax + 1, dtype=float)
-    n_cycles = MORLET_N_CYCLES   # 7 cycles — paper-exact (Ding et al. 2025)
-
-    # power: (n_epochs, n_chan, n_freqs, n_times)
-    power = tfr_array_morlet(
-        epoch_data, sfreq=SFREQ_DS, freqs=freqs,
-        n_cycles=n_cycles, output="power", verbose=False,
-    )
-
-    bl_mask   = (times >= BASELINE[0])  & (times <  BASELINE[1])
-    task_mask = (times >= task_win[0])  & (times <= task_win[1])
-
-    # Average across BOTH trials (axis 0) AND time (axis -1):
-    #   Pc → mean task-window power per (channel, frequency)
-    #   Rc → mean baseline power per (channel, frequency), session-level
-    Pc = power[:, :, :, task_mask].mean(axis=(0, -1))   # (n_chan, n_freqs)
-    Rc = power[:, :, :, bl_mask  ].mean(axis=(0, -1))   # (n_chan, n_freqs)
-
-    # ERD = (Pc - Rc) / Rc, fraction (negative = desynchronization).
-    # No more per-trial division, so no more exploding ratios.
-    ERD = (Pc - Rc) / (Rc + 1e-12)
-
-    print(f"    Rc mean={Rc.mean():.4f}  Pc mean={Pc.mean():.4f}  "
-          f"ERD range=[{ERD.min():+.3f}, {ERD.max():+.3f}]")
-
-    # Average over the band frequencies → (n_chan,)
-    return ERD.mean(axis=-1)
+# NOTE: the old per-finger `compute_band_erd(...)` helper has been folded
+# directly into `_compute_erd_band(...)` below so we can share a single
+# session-level baseline Rc across all fingers, which is what the paper
+# (Ding et al. 2025, Eq. 3) actually says — see the comment in the new
+# function for the audit trail.
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
@@ -305,19 +265,88 @@ def plot_erd_topo(erd_per_band, finger_names, info, title, save_path=None):
 
 
 def _compute_erd_band(epochs, finger_pairs, fmin, fmax, task_win=TASK_WIN_ONLINE):
-    """Compute per-finger ERD for one band. Returns {finger_name: (n_chan,) or None}."""
+    """
+    Compute per-finger ERD topomaps for one frequency band — paper-exact
+    (Ding et al. 2025, Eq. 3).
+
+        ERDc = (Pc - Rc) / Rc × 100 %
+
+    Where:
+      * Pc = average power in the alpha/beta band during the task window
+             — computed per FINGER (each finger's own trials).
+      * Rc = average baseline power **within each session**
+             — computed ONCE across ALL trials of ALL fingers in the
+               session, giving a single stable reference per (channel,
+               frequency). This is the crucial "within each session"
+               wording from the paper.
+
+    Pipeline executed here:
+      1. Morlet TFR computed ONCE on every trial in the session
+         (memory-cheaper than per-finger Morlet × 4).
+      2. Rc = average of power over (all trials, baseline time).
+      3. For each finger, Pc = average of power over (this finger's
+         trials, task-window time).
+      4. ERD = (Pc − Rc) / Rc, then averaged across the band's frequencies.
+
+    Returns
+    -------
+    {finger_name: ndarray(n_chan,) or None}
+    """
+    freqs    = np.arange(fmin, fmax + 1, dtype=float)
+    n_cycles = MORLET_N_CYCLES
+
+    all_data = epochs.get_data()                  # (n_total, n_chan, n_times)
+    times    = epochs.times
+
+    bl_mask   = (times >= BASELINE[0]) & (times <  BASELINE[1])
+    task_mask = (times >= task_win[0]) & (times <= task_win[1])
+
+    print(f"  Morlet TFR on {len(all_data)} epoch(s) "
+          f"({len(freqs)} freqs, {fmin}-{fmax} Hz) ...", flush=True)
+    power = tfr_array_morlet(
+        all_data, sfreq=SFREQ_DS, freqs=freqs,
+        n_cycles=n_cycles, output="power", verbose=False,
+    )
+    # power shape: (n_total_epochs, n_chan, n_freqs, n_times)
+
+    # ── Session-level baseline reference Rc ─────────────────────────────────
+    # Average over ALL trials (axis 0) AND baseline-time (axis -1).
+    # This is the paper's "average baseline power within each session".
+    Rc = power[:, :, :, bl_mask].mean(axis=(0, -1))    # (n_chan, n_freqs)
+
     result = {}
     for fname, feid in finger_pairs:
-        mask = epochs.events[:, 2] == feid
-        fepo = epochs[mask]
-        if len(fepo) == 0:
-            print(f"  {fname}: no epochs — skipping")
+        mask     = epochs.events[:, 2] == feid
+        n_trials = int(mask.sum())
+        if n_trials == 0:
+            print(f"    {fname:8s}: no epochs — skipping")
             result[fname] = None
             continue
-        print(f"  {fname}: {len(fepo)} trial(s) -> Morlet TFR...", end=" ", flush=True)
-        erd = compute_band_erd(fepo.get_data(), fepo.times, fmin, fmax, task_win)
-        result[fname] = erd
-        print(f"ERD [{erd.min():.3f}, {erd.max():.3f}]")
+
+        # Per-finger task-window power
+        Pc = power[mask][:, :, :, task_mask].mean(axis=(0, -1))  # (n_chan, n_freqs)
+
+        # ERD vs the session-level Rc, then average across the band freqs
+        ERD        = (Pc - Rc) / (Rc + 1e-12)
+        erd_per_ch = ERD.mean(axis=-1)                 # (n_chan,)
+
+        print(f"    {fname:8s}: {n_trials:3d} trial(s)  "
+              f"Pc̄={Pc.mean():+.4f}  Rc̄={Rc.mean():+.4f}  "
+              f"ERD=[{erd_per_ch.min():+.3f}, {erd_per_ch.max():+.3f}]")
+
+        # ── diagnostic: flag outlier channels (|ERD| > 1) ───────────────────
+        extreme = np.where(np.abs(erd_per_ch) > 1.0)[0]
+        if extreme.size > 0:
+            worst_pos = np.argsort(erd_per_ch)[-3:][::-1]
+            worst_neg = np.argsort(erd_per_ch)[:3]
+            print(f"      [diag] {extreme.size} channel(s) with |ERD|>1")
+            print(f"             top +ERS: " + ", ".join(
+                f"ch{int(i)}={erd_per_ch[i]:+.2f}" for i in worst_pos))
+            print(f"             top -ERD: " + ", ".join(
+                f"ch{int(i)}={erd_per_ch[i]:+.2f}" for i in worst_neg))
+
+        result[fname] = erd_per_ch
+
     return result
 
 
