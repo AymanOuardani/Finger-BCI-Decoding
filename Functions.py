@@ -1414,6 +1414,24 @@ def _expand_rows(table_elem, ns_map):
                     table_elem.insert(idx + k, copy.deepcopy(child))
 
 
+def _normalize_formula_prefixes(content):
+    """Collapse duplicated formula-namespace prefixes in table:formula values.
+
+    Every ODF formula is stored as ``<prefix>:=<expr>`` where ``<prefix>`` is the
+    OpenFormula namespace marker (``of`` in ODF 1.2, ``oooc`` in older files).
+    When the file is opened and re-saved (e.g. by LibreOffice) the prefix can get
+    duplicated, e.g. ``of:=of:=SUM([.C6:.C26])/21``, which LibreOffice then shows
+    to the user as ``=of:=SUM(...)``. This restores a single leading prefix:
+    ``of:=of:=of:=SUM(...)`` -> ``of:=SUM(...)``. Clean formulas are left as-is.
+    """
+    def _collapse(match):
+        value = re.sub(
+            r'^((?:of|oooc):=)(?:(?:of|oooc):=)+', r'\1', match.group(1))
+        return 'table:formula="' + value + '"'
+
+    return re.sub(r'table:formula="([^"]*)"', _collapse, content)
+
+
 def write_to_ods(ods_path, row_idx, writes, table_name):
     """
     Write one or more (col_idx, value) pairs to a specific row of an ODS sheet.
@@ -1451,8 +1469,7 @@ def write_to_ods(ods_path, row_idx, writes, table_name):
         _set_cell(target_row, col_idx, value, ns_map)
 
     new_content = ET.tostring(root, encoding="unicode")
-    new_content = re.sub(r'(=of:)+(?==)',   '=of:',   new_content)
-    new_content = re.sub(r'(=oooc:)+(?==)', '=oooc:', new_content)
+    new_content = _normalize_formula_prefixes(new_content)
     if not new_content.startswith("<?xml"):
         new_content = ('<?xml version="1.0" encoding="UTF-8"?>\n'
                        + new_content)
