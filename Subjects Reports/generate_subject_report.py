@@ -47,12 +47,10 @@ SCRIPT_DIR = (
     "/15 - STING (Début 30-03 et Fin 14-08)/Suivi du Stage"
     "/Itération 1/Week 1/W1D1 - 30-03/Codes/Finger-BCI-Decoding-main/Original_Codes"
 )
-EXCEL_DIR = (
-    "C:/Users/aymen/Desktop/5 Years Of Engineering/DATASIM/DATASIM - Ouardani"
-    "/15 - STING (Début 30-03 et Fin 14-08)/Suivi du Stage"
-    "/Itération 1/Week 1/W1D1 - 30-03/Codes/Finger-BCI-Decoding-main/Original_Codes"
-    "/ressources"
-)
+# Excel/ODS tracking files live in the repo's own Ressources folder
+# (this script sits in <repo>/Subjects Reports, so the repo root is one level up).
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXCEL_DIR = os.path.join(REPO_DIR, "Ressources")
 CM_ROOT = (
     "C:/Users/aymen/Desktop/5 Years Of Engineering/DATASIM/DATASIM - Ouardani"
     "/15 - STING (Début 30-03 et Fin 14-08)/Suivi du Stage"
@@ -297,6 +295,24 @@ def _expand_rows(table_elem, ns_map):
                     table_elem.insert(idx + k, copy.deepcopy(child))
 
 
+def _normalize_formula_prefixes(content):
+    """Collapse duplicated formula-namespace prefixes in table:formula values.
+
+    Every ODF formula is stored as ``<prefix>:=<expr>`` where ``<prefix>`` is the
+    OpenFormula namespace marker (``of`` in ODF 1.2, ``oooc`` in older files).
+    When the file is opened and re-saved (e.g. by LibreOffice) the prefix can get
+    duplicated, e.g. ``of:=of:=SUM([.C6:.C26])/21``, which LibreOffice then shows
+    to the user as ``=of:=SUM(...)``. This restores a single leading prefix:
+    ``of:=of:=of:=SUM(...)`` -> ``of:=SUM(...)``. Clean formulas are left as-is.
+    """
+    def _collapse(match):
+        value = re.sub(
+            r'^((?:of|oooc):=)(?:(?:of|oooc):=)+', r'\1', match.group(1))
+        return 'table:formula="' + value + '"'
+
+    return re.sub(r'table:formula="([^"]*)"', _collapse, content)
+
+
 def write_to_ods(ods_path, row_idx, writes, table_name):
     with zipfile.ZipFile(ods_path, "r") as z:
         content_bytes = z.read("content.xml")
@@ -323,8 +339,7 @@ def write_to_ods(ods_path, row_idx, writes, table_name):
         _set_cell(target_row, col_idx, value, ns_map)
 
     new_content = ET.tostring(root, encoding="unicode")
-    new_content = new_content.replace("=of:=of:", "=of:")
-    new_content = new_content.replace("=oooc:=oooc:", "=oooc:")
+    new_content = _normalize_formula_prefixes(new_content)
     if not new_content.startswith("<?xml"):
         new_content = '<?xml version="1.0" encoding="UTF-8"?>\n' + new_content
 
@@ -905,7 +920,7 @@ def generate_saliency_map(subj_id, subj_folder, nclass, model_type):
                 out_str = (", ".join(removed[:mid]) + "\n"
                            + ", ".join(removed[mid:])) if n_out > 3 \
                            else ", ".join(removed)
-                title_str = f"{label}\n✕ {n_out} outlier(s): {out_str}"
+                title_str = f"{label}\n{n_out} outlier(s): {out_str}"
             else:
                 title_str = f"{label}\n(no outliers)"
         else:

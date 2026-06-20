@@ -72,23 +72,36 @@ FINGERS = {
 }
 FINGERS_OFFLINE = [("Thumb", 1), ("Index", 2), ("Middle", 3), ("Pinky", 4)]
 
-# Fullband is an analysis-side extension not present in the paper. Its upper
-# bound is clamped to 30 Hz so it stays inside the paper-exact 2–30 Hz filter.
+# Paper-defined bands (Ding et al. 2025, Sec. "Electrophysiological analysis"):
+#   "Morlet wavelets were used to extract the average power in the alpha
+#    (8–13 Hz) and beta (13–30 Hz) bands"
+# `Fullband` is an analysis-side extension kept for convenience (e.g. the
+# SHOW ERD button in clean_ICA.py uses it). Its upper bound is clamped to
+# 30 Hz so it stays inside the paper-exact 2–30 Hz bandpass.
 BANDS_CONFIG = {
-    "Fullband": [(4,  30, "Fullband (4-30 Hz)")],
-    "Alpha":    [(8,  13, "Alpha (8-13 Hz)")],
-    "Beta":     [(13, 30, "Beta (13-30 Hz)")],
+    "Alpha":    [(8,  13, "Alpha (8-13 Hz)")],   # paper
+    "Beta":     [(13, 30, "Beta (13-30 Hz)")],   # paper
+    "Fullband": [(4,  30, "Fullband (4-30 Hz)")],  # extension (not in paper)
 }
 
 
 # ── Data pipeline ─────────────────────────────────────────────────────────────
 
 def _preprocess_raw(raw):
+    """
+    Paper-exact preprocessing (Ding et al. 2025):
+
+      "The raw EEG data were re-referenced to the common average,
+       downsampled to 100 Hz, and bandpass filtered between 2 and 30 Hz."
+
+    Order is taken literally from the text: CAR, then downsample, then
+    bandpass. No notch filter — the paper does not mention one, and the
+    2–30 Hz bandpass already removes any 60 Hz line noise.
+    """
     raw = raw.copy()
-    raw.notch_filter(np.arange(60, 501, 60), verbose=False)
-    raw.set_eeg_reference("average", verbose=False)
-    raw.filter(FILT_LO, FILT_HI, verbose=False)
-    raw.resample(SFREQ_DS, verbose=False)
+    raw.set_eeg_reference("average", verbose=False)   # 1. common average reference
+    raw.resample(SFREQ_DS, verbose=False)             # 2. downsample to 100 Hz
+    raw.filter(FILT_LO, FILT_HI, verbose=False)       # 3. bandpass 2–30 Hz
     return raw
 
 
@@ -293,7 +306,10 @@ def _compute_erd_band(epochs, finger_pairs, fmin, fmax, task_win=TASK_WIN_ONLINE
     {finger_name: ndarray(n_chan,) or None}
     """
     freqs    = np.arange(fmin, fmax + 1, dtype=float)
-    n_cycles = MORLET_N_CYCLES
+    # Adaptive n_cycles: scale with frequency so low-freq wavelets (4–8 Hz)
+    # use shorter kernels instead of the 1.75 s window that fixed n_cycles=7
+    # produces at 4 Hz. Minimum of 3 keeps frequency resolution acceptable.
+    n_cycles = np.maximum(freqs / 2, 3.0)
 
     all_data = epochs.get_data()                  # (n_total, n_chan, n_times)
     times    = epochs.times
@@ -330,9 +346,15 @@ def _compute_erd_band(epochs, finger_pairs, fmin, fmax, task_win=TASK_WIN_ONLINE
         ERD        = (Pc - Rc) / (Rc + 1e-12)
         erd_per_ch = ERD.mean(axis=-1)                 # (n_chan,)
 
+        # Use the mean of (Pc / Rc) instead of Pc.mean() / Rc.mean() to surface
+        # the ratio that actually drives ERD, in a scale that's readable
+        # (raw power values are ~1e-12 V² and round to 0.0000).
+        ratio = (Pc / (Rc + 1e-30)).mean()
         print(f"    {fname:8s}: {n_trials:3d} trial(s)  "
-              f"Pc̄={Pc.mean():+.4f}  Rc̄={Rc.mean():+.4f}  "
-              f"ERD=[{erd_per_ch.min():+.3f}, {erd_per_ch.max():+.3f}]")
+              f"Pc̄={Pc.mean():.3e}  Rc̄={Rc.mean():.3e}  "
+              f"Pc/Rc̄={ratio:+.3f}  "
+              f"ERD=[{erd_per_ch.min():+.3f}, median={np.median(erd_per_ch):+.3f}, "
+              f"{erd_per_ch.max():+.3f}]")
 
         # ── diagnostic: flag outlier channels (|ERD| > 1) ───────────────────
         extreme = np.where(np.abs(erd_per_ch) > 1.0)[0]
@@ -351,10 +373,12 @@ def _compute_erd_band(epochs, finger_pairs, fmin, fmax, task_win=TASK_WIN_ONLINE
 
 
 def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
-                        title, save_path=None, show=True):
+                        title, save_path=None, show=True, vlim=None, cmap=None):
     """
     Two-row comparison figure: Before ICA (top) vs After ICA (bottom).
     erd_raw, erd_ica : {finger_name: (n_chan,) array or None}
+    vlim : (vmin, vmax) colorbar range; defaults to (-0.5, 0.0) when None.
+    cmap : matplotlib colormap name; defaults to "Blues_r" when None.
     """
     n_cols = len(finger_names)
 
@@ -365,7 +389,8 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
     )
     fig.subplots_adjust(top=0.88, right=0.88, hspace=0.1)
 
-    vmin, vmax = -0.5, 0.0
+    vmin, vmax = vlim if vlim is not None else (-0.5, 0.0)
+    cmap = cmap or "Blues_r"
 
     row_labels = [f"Before ICA\n{band_label}", f"After ICA\n{band_label}"]
     row_dicts  = [erd_raw, erd_ica]
@@ -389,7 +414,7 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
             mne.viz.plot_topomap(
                 erd, info,
                 axes=ax,
-                cmap="Blues_r",          # dark blue at vmin, white at vmax
+                cmap=cmap,               # default Blues_r; RdBu_r for signed [-1,1]
                 vlim=(vmin, vmax),
                 contours=0,
                 extrapolate="head",
@@ -410,7 +435,7 @@ def plot_erd_comparison(erd_raw, erd_ica, band_label, finger_names, info,
 
     cbar_ax = fig.add_axes([0.91, 0.15, 0.025, 0.65])
     sm = plt.cm.ScalarMappable(
-        cmap="Blues_r", norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm.set_array([])
     cbar = plt.colorbar(sm, cax=cbar_ax, label="ERD (fraction)")
     ticks = np.linspace(vmin, vmax, 6)

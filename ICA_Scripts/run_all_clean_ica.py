@@ -17,7 +17,6 @@ import sys
 import os
 import glob
 import numpy as np
-from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -29,16 +28,13 @@ from Functions import (
 )
 from config import EOG_THRESHOLD, EMG_SLOPE_THRESH
 
-ICA_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE        = os.path.join(ICA_SCRIPTS_DIR, 'cleaning_ica_log.txt')
-
 # ── Configuration — edit these before running ────────────────────────────────
-IS_OFFLINE  = False
+IS_OFFLINE  = True
 SESSION_NUM = 1
 NCLASS      = 2
-TASK        = 'ME'
+TASK        = 'MI'
 MODELTYPE   = 'Orig'    # ignored when IS_OFFLINE = True
-SUBJECTS    = list(range(1, 22))
+SUBJECTS    = list(range(13, 17))
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -94,44 +90,27 @@ def main():
     print(f"Subjects      : {SUBJECTS}")
     print()
 
-    with open(LOG_FILE, 'w', encoding='utf-8') as log:
-        log.write(f'ICA Cleaning Log — {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
-        log.write(f'Task     : {TASK}  |  Mode : {mode}\n')
-        log.write(f'EOG thr  : {EOG_THRESHOLD}  |  EMG thr : {EMG_SLOPE_THRESH}\n')
-        log.write('='*60 + '\n\n')
+    ok_count  = 0
+    err_count = 0
 
-        ok_count  = 0
-        err_count = 0
+    for subj_id in SUBJECTS:
+        print(f'\n{"="*60}')
+        print(f'Subject S{subj_id:02}')
+        print(f'{"="*60}')
 
-        for subj_id in SUBJECTS:
-            print(f'\n{"="*60}')
-            print(f'Subject S{subj_id:02}')
-            print(f'{"="*60}')
+        try:
+            n_excl, eog_idx, emg_idx = clean_subject(subj_id)
+            status = f'OK — {n_excl} component(s) removed'
+            ok_count += 1
+        except Exception as e:
+            status = f'Error — {e}'
+            print(f'  [ERROR] {e}')
+            err_count += 1
 
-            try:
-                n_excl, eog_idx, emg_idx = clean_subject(subj_id)
-                status = f'✅ OK — {n_excl} component(s) removed'
-                ok_count += 1
-            except Exception as e:
-                status = f'❌ Error — {e}'
-                print(f'  [ERROR] {e}')
-                n_excl, eog_idx, emg_idx = 0, [], []
-                err_count += 1
-
-            print(f'Status : {status}')
-
-            log.write(f'S{subj_id:02}\n')
-            log.write(f'  Status : {status}\n')
-            log.write(f'  EOG    : {eog_idx}\n')
-            log.write(f'  EMG    : {emg_idx}\n')
-            log.write('\n' + '-'*60 + '\n\n')
-            log.flush()
-
-        log.write(f'Summary : {ok_count} OK  |  {err_count} errors\n')
+        print(f'Status : {status}')
 
     print(f'\n{"="*60}')
     print(f'Done — {ok_count} OK  |  {err_count} errors')
-    print(f'Log saved to : {LOG_FILE}')
 
 
 if __name__ == '__main__':

@@ -93,6 +93,8 @@ def load_online_raw(subj_id, task, session, nclass, model_type):
         )
         raw.set_annotations(annot)
 
+    raw.notch_filter(np.arange(60, 501, 60))
+
     counts = Counter(id_to_label.get(e[2], str(e[2])) for e in all_events)
     print(f"  Total duration : {raw.times[-1]:.1f} s")
     print(f"  Channels       : {raw.info['nchan']}")

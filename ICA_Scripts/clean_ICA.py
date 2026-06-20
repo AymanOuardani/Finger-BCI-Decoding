@@ -57,6 +57,12 @@ def clean_online(subj, sess, ncl, task, model):
         ica_cache_path=ica_cache_path,
     )
 
+    # Persist the validated exclusions into the ICA .fif so they are kept
+    # permanently and reused by later steps (no need to re-validate).
+    ica.save(ica_cache_path, overwrite=True)
+    print(f"  Saved ICA with {len(ica.exclude)} excluded component(s) "
+          f"{sorted(ica.exclude)} to:\n  {ica_cache_path}")
+
     save_folder = get_ica_folder(folder)
     print(f"\n[CONFIRM] Saving {len(ica.exclude)} component(s) removed to:\n  {save_folder}")
     save_ica_cleaned_mat_files(ica, raw, mat_files, save_folder)
@@ -83,6 +89,12 @@ def clean_offline(subj_id, task):
         subj_id=subj_id, task=task, session=0, nclass=0, model_type="Offline",
         ica_cache_path=ica_cache_path,
     )
+
+    # Persist the validated exclusions into the ICA .fif so they are kept
+    # permanently and reused by later steps (no need to re-validate).
+    ica.save(ica_cache_path, overwrite=True)
+    print(f"  Saved ICA with {len(ica.exclude)} excluded component(s) "
+          f"{sorted(ica.exclude)} to:\n  {ica_cache_path}")
 
     save_folder = get_ica_folder(folder)
     print(f"\n[CONFIRM] Saving {len(ica.exclude)} component(s) removed to:\n  {save_folder}")

@@ -9,19 +9,17 @@ Requires clean_ICA.py to have been run first for all subjects.
 import subprocess
 import os
 import sys
-from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 ICA_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE        = os.path.join(ICA_SCRIPTS_DIR, 'training_ica_log.txt')
 
 # ── Configuration — edit these to run a different combo ──────────────────────
 SESSION_NUM = 1
-NCLASS      = 2
+NCLASS      = 3
 TASK        = 'MI'
 MODELTYPE   = 'Orig'    # "Orig" = train from scratch | "Finetune" = fine-tune Orig
-SUBJECTS    = [4]
+SUBJECTS    = [5]
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -76,30 +74,16 @@ def main():
     print(f"Subjects     : {SUBJECTS}")
     print()
 
-    with open(LOG_FILE, 'w', encoding='utf-8') as log:
-        log.write(f'ICA Training Log — {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
-        log.write(f'Config : session={SESSION_NUM}, nclass={NCLASS}, task={TASK}, modeltype={MODELTYPE}\n')
-        log.write('='*60 + '\n\n')
+    for subj_id in SUBJECTS:
+        cmd_str, last_10, returncode = run_subject(subj_id)
 
-        for subj_id in SUBJECTS:
-            cmd_str, last_10, returncode = run_subject(subj_id)
+        print('\nLast 10 lines of output:')
+        for line in last_10:
+            print(f'  {line}')
+        status = 'OK' if returncode == 0 else f'Error (code {returncode})'
+        print(f'Status : {status}')
 
-            print('\nLast 10 lines of output:')
-            for line in last_10:
-                print(f'  {line}')
-            status = '✅ OK' if returncode == 0 else f'❌ Error (code {returncode})'
-            print(f'Status : {status}')
-
-            log.write(f'Subject S{subj_id:02}\n')
-            log.write(f'Command : {cmd_str}\n')
-            log.write(f'Status  : {status}\n')
-            log.write('Last 10 lines :\n')
-            for line in last_10:
-                log.write(f'  {line}\n')
-            log.write('\n' + '-'*60 + '\n\n')
-            log.flush()
-
-    print(f'\n\nDone. Log saved to : {LOG_FILE}')
+    print('\n\nDone.')
 
 
 if __name__ == '__main__':

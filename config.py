@@ -32,7 +32,10 @@ SCRIPT_DIR = (
     "/15 - STING (Début 30-03 et Fin 14-08)/Suivi du Stage"
     "/Itération 1/Week 1/W1D1 - 30-03/Codes/Finger-BCI-Decoding-main/Original_Codes"
 )
-EXCEL_DIR    = os.path.join(SCRIPT_DIR, "Ressources")
+# Excel/ODS tracking files live in the repo's own Ressources folder
+# (the directory containing this config.py), not in SCRIPT_DIR.
+REPO_DIR     = os.path.dirname(os.path.abspath(__file__))
+EXCEL_DIR    = os.path.join(REPO_DIR, "Ressources")
 TRACKING_ODS = os.path.join(EXCEL_DIR, "Tracking.ods")
 EXCEL_DATA   = os.path.join(EXCEL_DIR, "Excel DATA.xlsx")
 ICA_FIF_FOLDER = os.path.join(SAVE_FOLDER, "ICA_Fitted")
@@ -91,7 +94,7 @@ ALL_SUBJECTS = list(range(1, 22))   # subjects S01 to S21
 
 # Subjects included in group ERD plots — edit this list to restrict the group.
 # Set to ALL_SUBJECTS to include everyone.
-GROUP_ERD_SUBJECTS = [1,2,3,4,9]  # S01 to S21
+GROUP_ERD_SUBJECTS = [2,3,4,5,6,7,8,9,11,12,13]
 
 KEEP_LABELS = {
     2: [1, 4],        # 2-class: thumb, pinky

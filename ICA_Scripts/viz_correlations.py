@@ -511,9 +511,8 @@ def run_correlation_analysis(subj_id, task, session=1, nclass=2,
     print(f"\nLoading data from: {folder}")
     raw, _, _ = build_raw_from_mat_files(mat_files)
 
-    if is_offline:
-        print("  Preprocessing: notch filter at 60 Hz harmonics")
-        raw.notch_filter(np.arange(60, 501, 60))
+    print("  Preprocessing: notch filter at 60 Hz harmonics")
+    raw.notch_filter(np.arange(60, 501, 60))
 
     # 1. Fit ICA (or load from cache)
     ica_cache_path = (get_ica_fif_path(subj_id, task) if is_offline

@@ -15,10 +15,11 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from Functions import load_and_filter_data, generate_paths, train_models
+from Functions import load_and_filter_data, generate_paths, train_models, write_to_ods
 from config import (
-    DATA_FOLDER, SAVE_FOLDER,
+    DATA_FOLDER, SAVE_FOLDER, TRACKING_ODS,
     MAXTRIAL_TRAINING_S, WINDOWLEN, BLOCK_SIZE, DOWNSRATE, BANDPASS_FILT,
+    SHEET_MODEL_START, ROW_SUBJECT_OFFSET,
 )
 
 import numpy as np
@@ -53,17 +54,25 @@ data_folder = DATA_FOLDER
 save_folder = SAVE_FOLDER
 os.makedirs(save_folder, exist_ok=True)
 
-data_paths = generate_paths(subj_id, task, nclass, session_num, model_type = modeltype, data_folder = data_folder)
+data_paths = generate_paths(subj_id, task, nclass, session_num, model_type=modeltype, data_folder=data_folder)
 data, label, params = load_and_filter_data(data_paths, params)
 
 save_name = os.path.join(save_folder, f'S{subj_id:02}_Sess{session_num:02}_{task}_{nclass}class_{modeltype}.h5')
 
-# if os.path.exists(save_name):
-#     answer = input(f"Model file already exists:\n  {save_name}\nDo you want to overwrite it? (yes/no): ").strip().lower()
-#     if answer != 'yes':
-#         print("Please delete the existing model if you want to run the same command")
-#         sys.exit(0)
-
 if modeltype == 'Finetune':
-    params['modelpath'] = save_name.replace('Finetune','Orig') # the pre-trained model to be fine-tuned on
-save_name = train_models(data, label, save_name, params)
+    params['modelpath'] = save_name.replace('Finetune', 'Orig')
+
+save_name, best_val_acc = train_models(data, label, save_name, params)
+
+# Write best val_accuracy to the Val_Accuracy column of the per-condition sheet
+per_sheet = f"{task}_Sess{session_num:02}_{nclass}Class"
+col_val   = SHEET_MODEL_START[modeltype]          # col 1 (Orig) or col 4 (Finetune)
+row_idx   = subj_id + ROW_SUBJECT_OFFSET
+
+write_to_ods(
+    TRACKING_ODS,
+    row_idx,
+    [(col_val, best_val_acc)],
+    table_name=per_sheet,
+)
+print(f"-> ODS [{per_sheet}] S{subj_id:02} col {col_val} = {best_val_acc:.4f}% (Val_Accuracy)")

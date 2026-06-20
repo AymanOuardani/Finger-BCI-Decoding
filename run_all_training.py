@@ -9,12 +9,10 @@ import subprocess
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from datetime import datetime
 
 from config import SCRIPT_DIR
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE     = os.path.join(SCRIPT_DIR, 'training_log.txt')
 
 SESSION_NUM = 2
 NCLASS      = 3
@@ -61,7 +59,7 @@ def run_subject(subj_id):
 
     proc.wait()
 
-    # Build the filtered summary for the log (last 10 useful lines)
+    # Build the filtered summary (last 10 useful lines)
     log_keywords = ['accuracy', 'Accuracy', 'val_accuracy', 'loss', 'Model saved',
                     'Training Finished', 'Epoch', 'train samples']
     useful_lines = [
@@ -74,32 +72,16 @@ def run_subject(subj_id):
     return cmd_str, display_lines, proc.returncode
 
 def main():
-    with open(LOG_FILE, 'w', encoding='utf-8') as log:
-        log.write(f'Training Log — {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n')
-        log.write(f'Config : session={SESSION_NUM}, nclass={NCLASS}, task={TASK}, modeltype={MODELTYPE}\n')
-        log.write('='*60 + '\n\n')
+    for subj_id in SUBJECTS:
+        cmd_str, last_10, returncode = run_subject(subj_id)
 
-        for subj_id in SUBJECTS:
-            cmd_str, last_10, returncode = run_subject(subj_id)
+        print('\nLast 10 lines of output :')
+        for line in last_10:
+            print(f'  {line}')
+        status = 'OK' if returncode == 0 else f'Error (code {returncode})'
+        print(f'Status : {status}')
 
-            # print to terminal
-            print('\nLast 10 lines of output :')
-            for line in last_10:
-                print(f'  {line}')
-            status = '✅ OK' if returncode == 0 else f'❌ Error (code {returncode})'
-            print(f'Status : {status}')
-
-            # write to log file
-            log.write(f'Subject S{subj_id:02}\n')
-            log.write(f'Command : {cmd_str}\n')
-            log.write(f'Status  : {status}\n')
-            log.write('Last 10 lines :\n')
-            for line in last_10:
-                log.write(f'  {line}\n')
-            log.write('\n' + '-'*60 + '\n\n')
-            log.flush()  # write immediately in case of crash
-
-    print(f'\n\nDone. Log saved to : {LOG_FILE}')
+    print('\n\nDone.')
 
 
 if __name__ == '__main__':

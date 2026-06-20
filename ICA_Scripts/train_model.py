@@ -14,11 +14,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from Functions import (
     load_and_filter_data, generate_paths, train_models,
-    get_standard_args, to_ica_path
+    get_standard_args, to_ica_path, write_to_ods,
 )
 from config import (
-    DATA_FOLDER, SAVE_FOLDER,
+    DATA_FOLDER, SAVE_FOLDER, TRACKING_ODS,
     MAXTRIAL_TRAINING_S, WINDOWLEN, BLOCK_SIZE, DOWNSRATE, BANDPASS_FILT,
+    ICA_MODEL_START, ROW_SUBJECT_OFFSET,
 )
 
 import numpy as np
@@ -83,8 +84,20 @@ def main():
     print(f"\n-- Training -----------------------------------------------------")
     print(f"  Saving to : {save_name}")
 
-    save_name = train_models(data, label, save_name, params)
+    save_name, best_val_acc = train_models(data, label, save_name, params)
 
+    # Write best val_accuracy to the Val_Accuracy column of the per-condition sheet
+    per_sheet = f"{task}_Sess{session_num:02}_{nclass}Class"
+    col_val   = ICA_MODEL_START[modeltype]          # col 9 (Orig) or col 12 (Finetune)
+    row_idx   = subj_id + ROW_SUBJECT_OFFSET
+
+    write_to_ods(
+        TRACKING_ODS,
+        row_idx,
+        [(col_val, best_val_acc)],
+        table_name=per_sheet,
+    )
+    print(f"-> ODS [{per_sheet}] S{subj_id:02} col {col_val} = {best_val_acc:.4f}% (Val_Accuracy ICA)")
     print(f"\nDone. Model saved to: {save_name}")
 
 

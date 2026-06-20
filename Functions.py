@@ -659,7 +659,7 @@ def train_models(data, label, save_name, params):
     else:
         params['epochs'] = 300
 
-    model.fit(
+    history = model.fit(
         X_train, Y_train,
         batch_size      = batch_size,
         epochs          = params['epochs'],
@@ -669,9 +669,12 @@ def train_models(data, label, save_name, params):
         class_weight    = class_weights
     )
 
+    best_val_acc = max(history.history['val_accuracy']) * 100  # percentage
+
     print("Training Finished!")
+    print(f"Best val_accuracy : {best_val_acc:.4f}%")
     print(f"Model saved to {save_name}")
-    return save_name
+    return save_name, best_val_acc
 
 
 def eval_model(data, label, model_path, params, plot_save_path=None):
@@ -1016,7 +1019,19 @@ def build_raw_from_mat_files(mat_files, target_srate=SRATE):
     sample_offset = 0
 
     for fpath in mat_files:
-        mat = scipy.io.loadmat(fpath)
+        if os.path.getsize(fpath) == 0:
+            raise FileNotFoundError(
+                f"Empty .mat file (0 bytes) — likely a failed save:\n  {fpath}\n"
+                "Delete it and re-run clean_ICA.py for this subject."
+            )
+        try:
+            mat = scipy.io.loadmat(fpath)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to read .mat file (corrupted or incomplete):\n  {fpath}\n"
+                f"Cause: {exc}\n"
+                "Delete it and re-run clean_ICA.py for this subject."
+            ) from exc
         eeg = mat["eeg"]
         event = mat["event"]
         signals = eeg["data"][0][0].astype(float)
@@ -1232,7 +1247,9 @@ def save_ica_cleaned_mat_files(ica, raw, mat_files, save_folder):
 
         basename  = os.path.splitext(os.path.basename(fpath))[0]
         save_path = os.path.join(save_folder, f"{basename}_ICA.mat")
-        scipy.io.savemat(save_path, mat_clean)
+        tmp_path  = save_path + ".tmp"
+        scipy.io.savemat(tmp_path, mat_clean)
+        os.replace(tmp_path, save_path)   # atomic: never leaves a partial file
         print(f"    Saved: {os.path.basename(save_path)}")
 
     print(f"  Files saved to: {save_folder}")
@@ -1830,7 +1847,7 @@ def _open_signal_viewers_nonblocking(raw, raw_clean, subj_id, task, session,
 
 
 def _compute_erd_for_inspector(raw_orig, raw_clean, task, session, nclass,
-                               model_type):
+                               model_type, erd_vlim=None, erd_cmap=None):
     """
     Compute ERD topomaps (Before vs After ICA, Fullband) and return the figure.
 
@@ -1883,7 +1900,7 @@ def _compute_erd_for_inspector(raw_orig, raw_clean, task, session, nclass,
     existing = set(plt.get_fignums())
     plot_erd_comparison(
         erd_before, erd_after, band_label, finger_names, epochs_raw.info,
-        title, save_path=None, show=False,
+        title, save_path=None, show=False, vlim=erd_vlim, cmap=erd_cmap,
     )
     new_fignums = set(plt.get_fignums()) - existing
     if not new_fignums:
@@ -1922,7 +1939,8 @@ def _compute_erd_for_inspector(raw_orig, raw_clean, task, session, nclass,
 
 
 def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
-                           task, session, nclass, model_type, manual_extra=None):
+                           task, session, nclass, model_type, manual_extra=None,
+                           erd_vlim=None, erd_cmap=None):
     ch_names     = raw_filt.info["ch_names"]
     n_comp       = ica.n_components_
     sfreq        = raw_filt.info["sfreq"]
@@ -2406,7 +2424,8 @@ def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
         ica.apply(raw_clean, verbose=False)
         try:
             erd_fig = _compute_erd_for_inspector(
-                raw_orig, raw_clean, task, session, nclass, model_type
+                raw_orig, raw_clean, task, session, nclass, model_type,
+                erd_vlim=erd_vlim, erd_cmap=erd_cmap,
             )
             state["erd_fig"] = erd_fig
             if erd_fig is None:
@@ -2468,7 +2487,8 @@ def fit_or_load_ica(raw_filt, ica_cache_path=None):
 
 
 def apply_ica_to_raw(raw, subj_id=0, task="", session=0, nclass=0,
-                     model_type="Orig", ica_cache_path=None):
+                     model_type="Orig", ica_cache_path=None, erd_vlim=None,
+                     erd_cmap=None):
     """
     Fit (or load cached) ICA, launch the interactive inspector, then apply.
 
@@ -2488,7 +2508,8 @@ def apply_ica_to_raw(raw, subj_id=0, task="", session=0, nclass=0,
           "  -> Grey traces = excluded components\n"
           "  -> Click CONFIRM when satisfied\n")
     interactive_ica_setup(raw_filt, ica, slopes, raw,
-                          subj_id, task, session, nclass, model_type)
+                          subj_id, task, session, nclass, model_type,
+                          erd_vlim=erd_vlim, erd_cmap=erd_cmap)
     print(f"  ICA done — {len(ica.exclude)} component(s) excluded: {sorted(ica.exclude)}")
     raw_clean = raw.copy()
     ica.apply(raw_clean, verbose=False)
