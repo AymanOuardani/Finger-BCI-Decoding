@@ -52,7 +52,8 @@ import numpy as np
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from Functions import (build_raw_from_mat_files, get_folder, compute_exclusions)
+from Functions import (build_raw_from_mat_files, get_folder, get_offline_folder,
+                       compute_exclusions)
 from config import (EXCEL_DIR, TASK_LABELS, EOG_THRESHOLD, EMG_SLOPE_THRESH,
                     CORRUPTED_DATA)
 
@@ -338,6 +339,27 @@ def fill_subject(subj_id, task="MI"):
           f"Orig+Finetune merged):")
     for (sess, ncl), models in sorted(groups.items()):
         print(f"     Sess_{sess:02d}_{ncl}class  <- {models}")
+
+    # Detect artifact sources once from the offline recording so the same set
+    # of red-marked sources is used across all sessions and models.
+    offline_artifacts = set()
+    try:
+        off_folder  = get_offline_folder(subj_id, task)
+        off_mats    = sorted(glob.glob(os.path.join(off_folder, "*.mat")))
+        if off_mats:
+            raw_off, _, _ = build_raw_from_mat_files(off_mats)
+            raw_off.notch_filter(np.arange(60, 501, 60), verbose=False)
+            ica_off = ch._load_offline_ica(subj_id, task)
+            raw_off_filt = raw_off.copy().filter(1.0, None, verbose=False)
+            _, eog_idx, emg_idx = compute_exclusions(
+                ica_off, raw_off_filt, muscle_thresh=EMG_SLOPE_THRESH,
+                eog_thresh=EOG_THRESHOLD, ch_names=raw_off_filt.info["ch_names"],
+            )
+            offline_artifacts = set(eog_idx) | set(emg_idx)
+            print(f"  Offline artifact sources ({len(offline_artifacts)}): "
+                  f"{sorted(offline_artifacts)}")
+    except Exception as e:
+        print(f"  [warn] Offline artifact detection failed: {e}")
 
     sheets = []
     corr_rows = []          # long-format rows for the single "Corr" sheet

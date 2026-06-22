@@ -62,6 +62,13 @@ TASK_COLORS = {
 }
 TASK_NAMES  = set(TASK_COLORS)
 
+BANDS = [
+    ("Fullband", None,  None ),
+    ("Alpha",     8.0,  13.0 ),
+    ("Beta",     13.0,  30.0 ),
+    ("Beta+2",   30.0,  40.0 ),
+]
+
 WINDOW_SEC  = 30.0    # initial view width (seconds)
 SCROLL_STEP = 10.0    # seconds per ← → keypress
 
@@ -154,7 +161,6 @@ def _show_energy_detail_window(signal: np.ndarray, times: np.ndarray,
       - final energy value
     """
     N_EDGE  = 5   # values shown at each end of the vector
-    N_SQ    = 3   # squared terms shown explicitly in the formula
 
     # First trial per task
     first_trial: dict = {}
@@ -188,7 +194,7 @@ def _show_energy_detail_window(signal: np.ndarray, times: np.ndarray,
         t_r = times[s0:s1] - times[s0]   # relative time from 0
         n   = len(seg)
         E   = float(np.sum(seg ** 2))
-        n_e = min(N_EDGE, n // 2)          # guard against very short windows
+        n_e = min(N_EDGE, n // 2)
 
         # ── Signal plot ───────────────────────────────────────────────────────
         ax_sig = fig.add_subplot(gs[0, col])
@@ -220,11 +226,6 @@ def _show_energy_detail_window(signal: np.ndarray, times: np.ndarray,
         tail_vals = "  ".join(f"{v: .4f}" for v in seg[-n_e:])
         vec_line  = f"[ {head_vals}  ...  {tail_vals} ]"
 
-        # --- squared terms for formula display --------------------------------
-        n_sq  = min(N_SQ, n // 2)
-        sq_h  = " + ".join(f"({v:.4f})^2" for v in seg[:n_sq])
-        sq_t  = " + ".join(f"({v:.4f})^2" for v in seg[-2:])
-
         dur_s = tr["duration"]
         txt_body = (
             f"n = {n} samples   "
@@ -234,9 +235,6 @@ def _show_energy_detail_window(signal: np.ndarray, times: np.ndarray,
             f"  {vec_line}\n"
             "\n"
             f"E  =  x[0]^2 + x[1]^2 + ... + x[{n-1}]^2\n"
-            "\n"
-            f"   = {sq_h}\n"
-            f"     + ... + {sq_t}\n"
         )
         ax_txt.text(
             0.04, 0.98, txt_body,
@@ -248,7 +246,6 @@ def _show_energy_detail_window(signal: np.ndarray, times: np.ndarray,
             clip_on=True,
         )
 
-        # --- final energy value (larger, coloured) ---------------------------
         ax_txt.text(
             0.04, 0.08,
             f"E  =  {E:.6e}",
@@ -273,7 +270,6 @@ def _show_trial_detail_window(signal: np.ndarray, times: np.ndarray,
     win_offset: pixel offset so successive click-windows don't stack exactly.
     """
     N_EDGE = 5
-    N_SQ   = 3
 
     color = TASK_COLORS.get(trial["task"], "#ffffff")
     s0    = int(trial["onset"] * sfreq)
@@ -283,7 +279,6 @@ def _show_trial_detail_window(signal: np.ndarray, times: np.ndarray,
     n     = len(seg)
     E     = float(np.sum(seg ** 2))
     n_e   = min(N_EDGE, n // 2)
-    n_sq  = min(N_SQ, n // 2)
 
     title = (f"Trial #{trial_idx}  --  {trial['task']}"
              f"  |  onset = {trial['onset']:.2f} s"
@@ -336,8 +331,6 @@ def _show_trial_detail_window(signal: np.ndarray, times: np.ndarray,
 
     head_vals = "  ".join(f"{v: .4f}" for v in seg[:n_e])
     tail_vals = "  ".join(f"{v: .4f}" for v in seg[-n_e:])
-    sq_h      = " + ".join(f"({v:.4f})^2" for v in seg[:n_sq])
-    sq_t      = " + ".join(f"({v:.4f})^2" for v in seg[-2:])
 
     body = (
         f"n = {n} samples   "
@@ -347,9 +340,6 @@ def _show_trial_detail_window(signal: np.ndarray, times: np.ndarray,
         f"  [ {head_vals}  ...  {tail_vals} ]\n"
         "\n"
         f"E  =  x[0]^2 + x[1]^2 + ... + x[{n-1}]^2\n"
-        "\n"
-        f"   = {sq_h}\n"
-        f"     + ... + {sq_t}\n"
     )
     ax_txt.text(0.04, 0.98, body,
                 transform=ax_txt.transAxes,
@@ -366,6 +356,150 @@ def _show_trial_detail_window(signal: np.ndarray, times: np.ndarray,
     fig.suptitle(source_label, color="#64748b", fontsize=8, y=0.96)
     fig.canvas.draw()
     plt.pause(0.01)   # let the Tk event loop render the new window
+
+
+# ── Band correlations ──────────────────────────────────────────────────────────
+
+def _compute_band_correlations(signal: np.ndarray, sfreq: float,
+                                trials: list) -> dict:
+    """
+    Signed Pearson point-biserial between per-trial variance and each task's
+    one-vs-rest membership, computed for each frequency band.
+    Returns {band_label: {task_name: corr_value}}.
+    """
+    trial_classes = [tr["task"] for tr in trials]
+    tasks    = [t for t in TASK_COLORS if t in set(trial_classes)]
+    cls_arr  = np.array(trial_classes)
+    n        = len(trial_classes)
+
+    result = {}
+    for band_label, lo, hi in BANDS:
+        if lo is None:
+            sig_f = signal
+        else:
+            sig_f = mne.filter.filter_data(
+                signal[np.newaxis, :], sfreq, lo, hi, verbose=False
+            )[0]
+
+        variances = []
+        for tr in trials:
+            s0 = int(tr["onset"] * sfreq)
+            s1 = min(int((tr["onset"] + tr["duration"]) * sfreq), len(sig_f))
+            variances.append(float(np.sum(sig_f[s0:s1] ** 2)))
+
+        V  = np.array(variances, dtype=float)
+        V -= V.mean()
+        vs = V.std()
+
+        band_corr = {}
+        if vs == 0 or n == 0:
+            for T in tasks:
+                band_corr[T] = 0.0
+        else:
+            V /= vs
+            for T in tasks:
+                m  = (cls_arr == T).astype(float)
+                m -= m.mean()
+                ms = m.std()
+                band_corr[T] = float((m / ms) @ V / n) if ms > 0 else 0.0
+
+        result[band_label] = band_corr
+    return result
+
+
+def _show_energy_vector_window(records: list):
+    """
+    Non-blocking window: one row per source.
+    X = trial index, Y = energy (Σx²), dots + stems coloured by task.
+    """
+    n_src = len(records)
+    fig, axes = plt.subplots(n_src, 1, figsize=(18, 3.5 * n_src), squeeze=False)
+    fig.patch.set_facecolor("#0f172a")
+    fig.canvas.manager.set_window_title("Energy Vector — all trials")
+
+    for ax, (signal, times, sfreq, trials, label) in zip(axes[:, 0], records):
+        ax.set_facecolor("#1e293b")
+
+        for idx, tr in enumerate(trials):
+            col = TASK_COLORS.get(tr["task"], "#ffffff")
+            e   = tr["energy"]
+            ax.vlines(idx, 0, e, color=col, lw=0.8, alpha=0.6)
+            ax.scatter(idx, e, color=col, s=18, zorder=3)
+
+        ax.set_xlim(-1, len(trials))
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("Trial index", color="#94a3b8", fontsize=8)
+        ax.set_ylabel("Energy  (Σx²)", color="#94a3b8", fontsize=8)
+        ax.set_title(label, color="#e2e8f0", fontsize=10, pad=5)
+        ax.tick_params(colors="#94a3b8", labelsize=7)
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#374151")
+
+    patches = [mpatches.Patch(color=c, label=t, alpha=0.8)
+               for t, c in TASK_COLORS.items()]
+    axes[0, 0].legend(handles=patches, loc="upper right", fontsize=7,
+                      facecolor="#1e293b", edgecolor="#374151", labelcolor="#e2e8f0")
+
+    fig.tight_layout()
+    fig.canvas.draw()
+
+
+def _show_correlation_window(corr_list: list, source_labels: list):
+    """
+    Non-blocking window: n_sources rows × n_bands columns.
+    Each subplot is a horizontal bar chart of the signed variance-task
+    Pearson correlation for that (source, band) pair.
+    """
+    n_src   = len(corr_list)
+    n_bands = len(BANDS)
+
+    fig, axes = plt.subplots(
+        n_src, n_bands,
+        figsize=(4.5 * n_bands, 3.5 * n_src),
+        squeeze=False,
+    )
+    fig.patch.set_facecolor("#0f172a")
+    fig.canvas.manager.set_window_title("Energy – Task Correlations")
+
+    for row, (corr, label) in enumerate(zip(corr_list, source_labels)):
+        short = label.split("—")[-1].strip() if "—" in label else label
+        for col, (band_label, *_) in enumerate(BANDS):
+            ax = axes[row, col]
+            ax.set_facecolor("#1e293b")
+
+            band_corr      = corr.get(band_label, {})
+            tasks_present  = [t for t in TASK_COLORS if t in band_corr]
+            values         = [band_corr[t] for t in tasks_present]
+            colors         = [TASK_COLORS[t] for t in tasks_present]
+            y_pos          = list(range(len(tasks_present)))
+
+            bars = ax.bar(y_pos, values, color=colors, alpha=0.82, width=0.58)
+            ax.axhline(0, color="#64748b", lw=0.8, ls="--")
+            ax.set_ylim(-1.1, 1.1)
+            ax.set_xticks(y_pos)
+            ax.set_xticklabels(tasks_present, color="#cbd5e1", fontsize=9)
+            ax.set_ylabel("Pearson r", color="#94a3b8", fontsize=8)
+            ax.tick_params(colors="#94a3b8", labelsize=7)
+            for sp in ax.spines.values():
+                sp.set_edgecolor("#334155")
+
+            for bar, v in zip(bars, values):
+                va  = "bottom" if v >= 0 else "top"
+                yv  = v + 0.03 if v >= 0 else v - 0.03
+                ax.text(bar.get_x() + bar.get_width() / 2, yv,
+                        f"{v:+.3f}", va=va, ha="center",
+                        color="#e2e8f0", fontsize=7, fontfamily="monospace")
+
+            if row == 0:
+                ax.set_title(band_label, color="#e2e8f0",
+                             fontsize=10, fontweight="bold", pad=6)
+            if col == 0:
+                ax.set_ylabel(short + "\n\nPearson r", color="#94a3b8", fontsize=7)
+
+    fig.suptitle("Energy  ↔  Task  —  Signed Pearson correlation",
+                 color="#94a3b8", fontsize=10, y=1.01)
+    fig.tight_layout()
+    fig.canvas.draw()
 
 
 # ── Interactive viewer ─────────────────────────────────────────────────────────
@@ -553,10 +687,17 @@ def main():
 
     records = [_load_source(cfg) for cfg in SOURCES]
 
-    # Open one energy-detail window per source (non-blocking — all stay open
-    # alongside the main viewer until it is closed).
     for signal, times, sfreq, trials, label in records:
         _show_energy_detail_window(signal, times, sfreq, trials, label)
+
+    print("\n  Computing band correlations …")
+    corr_data = []
+    for signal, times, sfreq, trials, label in records:
+        short = label.split("—")[-1].strip() if "—" in label else label
+        print(f"    {short}")
+        corr_data.append(_compute_band_correlations(signal, sfreq, trials))
+    _show_correlation_window(corr_data, [r[4] for r in records])
+    _show_energy_vector_window(records)
 
     DualSourceViewer(records)
 
