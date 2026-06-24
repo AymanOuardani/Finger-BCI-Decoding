@@ -120,7 +120,7 @@ def _plot_signed_heatmap(mat, tasks_list, subj_id, task, mode, band_label,
     fig = plt.figure(figsize=(12, 6))
     ax = fig.add_subplot(111)
     im = ax.imshow(mat, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1)
-    fig.colorbar(im, ax=ax, label="Signed correlation")
+    fig.colorbar(im, ax=ax)
     ax.set_yticks(range(n_tasks)); ax.set_yticklabels(tasks_list)
     ax.set_xticks(range(n_comp))
     xt = ax.set_xticklabels([str(c) for c in range(n_comp)], fontsize=6, rotation=90)
@@ -129,7 +129,7 @@ def _plot_signed_heatmap(mat, tasks_list, subj_id, task, mode, band_label,
             lbl.set_color("red")
     ax.set_xlabel("ICA Source")
     ax.set_ylabel("Task")
-    ax.set_title(f"S{subj_id:02} | {task} | {mode} | {band_label}")
+    ax.set_title(f"S{subj_id:02} | {task} | {mode} | Energy Correlation in the band {band_label}")
     fig.tight_layout()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -402,18 +402,29 @@ def fill_subject(subj_id, task="MI"):
                     for c in range(n_comp):
                         corr_rows.append([
                             sess, ncl, model, band_label, T, c,
-                            float(mat[ti, c]), "Yes" if c in artifacts else "No",
+                            float(mat[ti, c]),
+                            "Yes" if c in offline_artifacts else "No",
                         ])
                     if ncl == 3:               # feed the Evolution sheet
                         evol[(sess, band_label, T, model)] = mat[ti]
-                save_path = os.path.join(
-                    ENERGY_CORR_DIR, f"S{subj_id:02d}", band_label,
-                    f"EnergyCorr_S{subj_id:02d}_{task}_Sess{sess:02d}_{ncl}class_{model}_{band_label}.png")
-                try:
-                    _plot_signed_heatmap(mat, tasks, subj_id, task, mode, band_label,
-                                         save_path, excluded=artifacts)
-                except Exception as ex:
-                    print(f"      [warn] heatmap failed ({model} {band_label}): {ex}")
+                model_tag = "1_Orig" if model == "Orig" else "2_Finetune"
+                fname     = (f"EnergyCorr_S{subj_id:02d}_{task}_Sess{sess:02d}"
+                             f"_{ncl}class_{model_tag}_{band_label}.png")
+                save_path = os.path.join(ENERGY_CORR_DIR,
+                                         f"S{subj_id:02d}", band_label, fname)
+                # Path used by _gen_energy_images.py (extra {ncl}class subfolder).
+                gen_path  = os.path.join(ENERGY_CORR_DIR,
+                                         f"S{subj_id:02d}", band_label,
+                                         f"{ncl}class", fname)
+                if os.path.exists(save_path) or os.path.exists(gen_path):
+                    print(f"      [skip] heatmap already exists: {fname}")
+                else:
+                    try:
+                        _plot_signed_heatmap(mat, tasks, subj_id, task, mode,
+                                             band_label, save_path,
+                                             excluded=offline_artifacts)
+                    except Exception as ex:
+                        print(f"      [warn] heatmap failed ({model} {band_label}): {ex}")
             if ncl == 3:
                 evol_sessions.add(sess)
                 evol_tasks.update(tasks)

@@ -5,14 +5,21 @@ Visualizes ICA component correlations with task signals.
 
 ICA fitting is skipped if a cached .fif file already exists (see get_ica_fif_path).
 
-Four figure types are opened simultaneously:
-  1. Heatmap            — all tasks × all components (fixed scale 0–0.6).
-  2. Per-task bar chart — one figure per task, same fixed scale.
-  3. plot_sources_with_task  — scrollable page viewer: all ICA source traces
+Correlations use the SIGNED point-biserial Pearson between each source's
+per-trial energy (sum of squares, Sigma x^2) and each task's one-vs-rest
+membership — the same computation as fill_energy_table.py.
+
+Figures opened simultaneously:
+  1. Signed energy heatmaps — one per band (Fullband, Alpha, Beta, Beta+2),
+                              diverging RdBu_r at scale −1..+1 (+1 red, −1 blue),
+                              with EOG/EMG artifact sources in red on the x-axis.
+                              Each is also saved as a PNG under the
+                              "Energy Correlation Maps" directory.
+  2. plot_sources_with_task  — scrollable page viewer: all ICA source traces
                                with task-signal subplots and task-period shading.
-  4. plot_source_inspector   — per-component detail: raw source + Hilbert
-                               envelope, z-scored task overlay, correlation
-                               scores in the title, Prev/Next buttons.
+  3. plot_source_inspector   — per-component detail: raw source + Hilbert
+                               envelope, z-scored task overlay, signed Fullband
+                               energy-correlation scores in the title, Prev/Next.
 
 Usage:
     Online:  python viz_correlations.py <subj> <sess> <nclass> <task> <model>
@@ -37,7 +44,14 @@ from Functions import (
     build_task_vectors, compute_envelope,
     get_standard_args, get_offline_args,
     get_ica_fif_path, fit_or_load_ica,
+    compute_exclusions,
 )
+from config import EOG_THRESHOLD, EMG_SLOPE_THRESH, TASK_LABELS
+
+# corr_heatmap.py (imported transitively) also forces matplotlib's TkAgg backend,
+# so reusing fill_energy_table's energy-correlation helpers is safe for the
+# interactive Tk viewers below.
+import fill_energy_table as fet
 
 _TASK_COLORS = ["green", "blue", "orange", "red", "gray",
                 "purple", "brown", "pink"]
@@ -494,6 +508,40 @@ def plot_sources_with_task(ica, raw_filt, raw, corr_matrix, tasks_list, n_per_pa
 
 
 # =============================================================================
+# SIGNED ENERGY-CORRELATION HEATMAP  (style of fill_energy_table.py)
+# =============================================================================
+
+def _signed_energy_heatmap(mat, tasks_list, subj_id, task, mode, band_label,
+                           save_path, excluded=None):
+    """Show AND save a signed energy<->task correlation heatmap.
+
+    Mirrors fill_energy_table._plot_signed_heatmap (diverging RdBu_r, scale
+    -1..+1, EOG/EMG artifact sources in red on the x-axis) but, unlike that
+    function, keeps the figure open (non-blocking show) instead of closing it,
+    so viz stays an interactive viewer while still writing the PNG.
+    """
+    excluded = set(excluded or [])
+    n_tasks, n_comp = mat.shape
+    fig = plt.figure(figsize=(12, 6))
+    ax  = fig.add_subplot(111)
+    im  = ax.imshow(mat, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1)
+    fig.colorbar(im, ax=ax, label="Signed energy correlation")
+    ax.set_yticks(range(n_tasks)); ax.set_yticklabels(tasks_list)
+    ax.set_xticks(range(n_comp))
+    xt = ax.set_xticklabels([str(c) for c in range(n_comp)], fontsize=6, rotation=90)
+    for c, lbl in zip(range(n_comp), xt):
+        if c in excluded:
+            lbl.set_color("red")
+    ax.set_xlabel("ICA Source")
+    ax.set_ylabel("Task")
+    ax.set_title(f"S{subj_id:02} | {task} | {mode} | Energy Correlation in the band {band_label}")
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show(block=False)
+
+
+# =============================================================================
 # MAIN ANALYSIS FUNCTION
 # =============================================================================
 
@@ -520,64 +568,74 @@ def run_correlation_analysis(subj_id, task, session=1, nclass=2,
     raw_filt = raw.copy().filter(1.0, None, verbose=False)
     ica = fit_or_load_ica(raw_filt, ica_cache_path)
 
-    # 2. Compute correlation matrix
-    print("Computing task <-> ICA correlations ...")
-    sources_data = ica.get_sources(raw).get_data()
-    sfreq        = float(raw.info["sfreq"])
-    task_vectors = build_task_vectors(raw)
+    # 2. Auto EOG/EMG artifact detection (same thresholds/logic as clean_ICA.py)
+    #    so artifact sources get red x-axis labels on the heatmaps.
+    artifacts = set()
+    try:
+        _, eog_idx, emg_idx = compute_exclusions(
+            ica, raw_filt, muscle_thresh=EMG_SLOPE_THRESH,
+            eog_thresh=EOG_THRESHOLD, ch_names=raw_filt.info["ch_names"],
+        )
+        artifacts = set(eog_idx) | set(emg_idx)
+    except Exception as e:
+        print(f"  [warn] EOG/EMG detection failed: {e}")
+    print(f"  Artifact sources ({len(artifacts)}): {sorted(artifacts)}")
 
-    if not task_vectors:
+    # 3. Per-trial energy <-> task correlations (signed Pearson), per band —
+    #    identical computation to fill_energy_table.py.
+    print("Computing energy <-> task correlations (signed) ...")
+    trials  = fet._chronological_trials(raw)
+    if not trials:
         print("\n[ERROR] No task annotations found. Cannot compute correlations.")
         return
+    classes = [cls for cls, _s, _e in trials]
+    tasks_list = [t for t in TASK_LABELS if t in set(classes)]
+    if not tasks_list:
+        print("\n[ERROR] No known task labels among trials.")
+        return
 
-    tasks_list   = list(task_vectors.keys())
-    n_tasks      = len(tasks_list)
-    n_comp       = sources_data.shape[0]
-    corr_matrix  = np.zeros((n_tasks, n_comp))
+    src_raw = ica.get_sources(raw)
+    n_comp  = len(src_raw.ch_names)
 
-    for t_idx, task_name in enumerate(tasks_list):
-        vec   = task_vectors[task_name]
-        vec_z = zscore(vec) if np.std(vec) > 0 else vec
-        for c_idx in range(n_comp):
-            comp_env = compute_envelope(sources_data[c_idx], sfreq)
-            if np.std(comp_env) > 0 and np.std(vec_z) > 0:
-                r = np.corrcoef(vec_z, zscore(comp_env))[0, 1]
-                corr_matrix[t_idx, c_idx] = 0.0 if np.isnan(r) else abs(r)
+    mode = (f"Offline | EnergyCorr" if is_offline
+            else f"Sess{session:02d} {nclass}class {model_type} | EnergyCorr")
+    sess_tag  = 0 if is_offline else session
+    ncl_tag   = 0 if is_offline else nclass
+    model_tag = "Offline" if is_offline else model_type
 
-    # 3. Print summary
-    for t_idx, task_name in enumerate(tasks_list):
-        print(f"\nTask: {task_name}")
-        print("Correlations:", np.round(corr_matrix[t_idx], 3))
+    corr_matrix_full = None      # Fullband matrix feeds the interactive viewers
+    for band_label, lo, hi in fet.BANDS:
+        if lo is None:
+            band_data = src_raw.get_data()
+        else:
+            band_data = src_raw.copy().filter(lo, hi, verbose=False).get_data()
 
-    # 4. Static heatmap (non-blocking, stays open alongside interactive viewers)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(corr_matrix, aspect="auto", cmap="viridis", vmin=0, vmax=0.6)
-    plt.colorbar(label="Absolute Correlation")
-    plt.yticks(range(n_tasks), tasks_list)
-    plt.xticks(range(n_comp))
-    plt.xlabel("ICA Components")
-    plt.ylabel("Tasks")
-    plt.title(f"Task vs ICA Correlation Heatmap — S{subj_id:02} | {task}")
-    plt.tight_layout()
-    plt.show(block=False)
+        # E[t, c] = sum of squared samples of source c over trial t's window.
+        E = np.array([
+            np.sum(band_data[:, s:e] ** 2, axis=1)
+            for _cls, s, e in trials
+        ])                                            # (n_trials, n_comp)
 
-    # 4b. Per-task bar charts (one figure per task, same fixed scale)
-    for t_idx, task_name in enumerate(tasks_list):
-        plt.figure(figsize=(10, 4))
-        plt.bar(range(n_comp), corr_matrix[t_idx],
-                color=_BG_COLORS[t_idx % len(_BG_COLORS)], alpha=0.8)
-        plt.axhline(0.6, color="red", linestyle="--", linewidth=0.8, alpha=0.6)
-        plt.title(f"ICA Correlation with Task: {task_name} — S{subj_id:02} | {task}")
-        plt.xlabel("ICA Component")
-        plt.ylabel("Absolute Correlation")
-        plt.ylim(0, 0.6)
-        plt.grid(alpha=0.3)
-        plt.tight_layout()
-        plt.show(block=False)
+        mat = fet._energy_task_corr(E, classes, tasks_list)   # (n_tasks, n_comp)
 
-    # 5. Interactive viewers — all opened simultaneously, single blocking show at end
-    plot_sources_with_task(ica, raw_filt, raw, corr_matrix, tasks_list)
-    plot_source_inspector(ica, raw, corr_matrix, tasks_list)
+        print(f"\n[{band_label}]")
+        for t_idx, task_name in enumerate(tasks_list):
+            print(f"  {task_name}:", np.round(mat[t_idx], 3))
+
+        fname     = (f"EnergyCorr_S{subj_id:02d}_{task}_Sess{sess_tag:02d}"
+                     f"_{ncl_tag}class_{model_tag}_{band_label}.png")
+        save_path = os.path.join(fet.ENERGY_CORR_DIR, f"S{subj_id:02d}",
+                                 band_label, fname)
+        _signed_energy_heatmap(mat, tasks_list, subj_id, task, mode,
+                               band_label, save_path, excluded=artifacts)
+
+        if lo is None:
+            corr_matrix_full = mat
+
+    # 4. Interactive viewers — fed the signed Fullband energy correlations.
+    #    Single blocking show at the end keeps every window responsive.
+    plot_sources_with_task(ica, raw_filt, raw, corr_matrix_full, tasks_list)
+    plot_source_inspector(ica, raw, corr_matrix_full, tasks_list)
     plt.show(block=True)
 
 
