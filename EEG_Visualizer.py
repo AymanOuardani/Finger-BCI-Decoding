@@ -5,8 +5,11 @@ Interactive EEG signal viewer for the STING dataset.
 Click on a channel name in the viewer → highlights it on the topomap.
 
 Usage:
-    Online:  python EEG_Visualizer.py <subj> <sess> <nclass> <task> <model>
-    Offline: python EEG_Visualizer.py <subj> <task> OFF
+    Online:  python EEG_Visualizer.py <subj> <sess> <nclass> <task> <model> [band]
+    Offline: python EEG_Visualizer.py <subj> <task> OFF [band]
+
+    [band] (optional, last argument) selects the band-pass applied before viewing:
+        Alpha (8-13 Hz), Beta (13-30 Hz), Delta (1-4 Hz), Fullband (default, no band-pass).
 """
 
 import os
@@ -38,10 +41,30 @@ from config import SRATE
 
 EVENT_ID = {"Thumb": 1, "Index": 2, "Middle": 3, "Pinky": 4, "TrialEnd": 9}
 
+# Band-pass ranges (Hz) selectable from the command line. Fullband = no band-pass.
+BANDS = {
+    "Delta":    (1.0, 4.0),
+    "Alpha":    (8.0, 13.0),
+    "Beta":     (13.0, 30.0),
+    "Fullband": None,
+}
+
+
+def apply_band_filter(raw, band):
+    """Band-pass filter `raw` in place. 'Fullband' leaves the signal untouched."""
+    freqs = BANDS.get(band)
+    if freqs is None:
+        print(f"  Band           : {band} (no band-pass applied)")
+        return raw
+    l_freq, h_freq = freqs
+    print(f"  Band           : {band} ({l_freq:g}-{h_freq:g} Hz band-pass)")
+    raw.filter(l_freq, h_freq, verbose=False)
+    return raw
+
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-def load_online_raw(subj_id, task, session, nclass, model_type):
+def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband"):
     folder    = get_folder(subj_id, task, session, nclass, model_type)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -94,6 +117,7 @@ def load_online_raw(subj_id, task, session, nclass, model_type):
         raw.set_annotations(annot)
 
     raw.notch_filter(np.arange(60, 501, 60))
+    apply_band_filter(raw, band)
 
     counts = Counter(id_to_label.get(e[2], str(e[2])) for e in all_events)
     print(f"  Total duration : {raw.times[-1]:.1f} s")
@@ -102,7 +126,7 @@ def load_online_raw(subj_id, task, session, nclass, model_type):
     return raw
 
 
-def load_offline_raw(subj_id, task):
+def load_offline_raw(subj_id, task, band="Fullband"):
     folder    = get_offline_folder(subj_id, task)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -111,6 +135,7 @@ def load_offline_raw(subj_id, task):
     print(f"\nLoading {len(mat_files)} offline .mat file(s) from:\n  {folder}")
     raw, all_events, id_to_label = build_raw_from_mat_files(mat_files)
     raw.notch_filter(np.arange(60, 501, 60))
+    apply_band_filter(raw, band)
 
     counts = Counter(id_to_label.get(e[2], str(e[2])) for e in all_events)
     print(f"  Total duration : {raw.times[-1]:.1f} s")
@@ -197,7 +222,7 @@ class TopoHighlighter:
 
 # ── Viewer ────────────────────────────────────────────────────────────────────
 
-def launch_viewer(raw, subj_id, task, session, nclass, model_type):
+def launch_viewer(raw, subj_id, task, session, nclass, model_type, band="Fullband"):
     """Open the MNE signal browser + topomap. Clicking a channel highlights it."""
     info, ch_names = make_info()
 
@@ -209,6 +234,7 @@ def launch_viewer(raw, subj_id, task, session, nclass, model_type):
             f"S{subj_id:02}  |  {task} {nclass}-class  |  "
             f"Session {session}  |  {model_label}"
         )
+    title += f"  |  {band}"
 
     print(f"\nOpening MNE viewer — {title}")
     print("Controls:")
@@ -271,34 +297,43 @@ def launch_viewer(raw, subj_id, task, session, nclass, model_type):
 
 # ── Entry points ──────────────────────────────────────────────────────────────
 
-def view_online(subj, sess, ncl, task, model):
+def view_online(subj, sess, ncl, task, model, band="Fullband"):
     print("=" * 55)
     print("   STING EEG Signal Viewer")
     print("=" * 55)
     print(f"\nSelected: S{subj:02} | {task} {ncl}-class | Session {sess} | "
-          f"{'Base' if model == 'Orig' else 'Fine-tuned'}")
-    raw = load_online_raw(subj, task, sess, ncl, model)
-    launch_viewer(raw, subj, task, sess, ncl, model)
+          f"{'Base' if model == 'Orig' else 'Fine-tuned'} | {band}")
+    raw = load_online_raw(subj, task, sess, ncl, model, band)
+    launch_viewer(raw, subj, task, sess, ncl, model, band)
 
 
-def view_offline(subj_id, task):
+def view_offline(subj_id, task, band="Fullband"):
     print("=" * 55)
     print("   STING EEG Signal Viewer - OFFLINE")
     print("=" * 55)
-    print(f"\nSelected: S{subj_id:02} | {task} | Offline")
-    raw = load_offline_raw(subj_id, task)
-    launch_viewer(raw, subj_id, task, 0, 0, "Offline")
+    print(f"\nSelected: S{subj_id:02} | {task} | Offline | {band}")
+    raw = load_offline_raw(subj_id, task, band)
+    launch_viewer(raw, subj_id, task, 0, 0, "Offline", band)
 
 
 def main():
     try:
+        # Optional last argument selects the band-pass (default Fullband).
+        band = "Fullband"
+        if len(sys.argv) > 1:
+            band_lookup = {b.lower(): b for b in BANDS}
+            cand = sys.argv[-1].strip().lower()
+            if cand in band_lookup:
+                band = band_lookup[cand]
+                sys.argv.pop()  # strip band so the standard parsers don't see it
+
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()  # strip "OFF" so argparse sees only <subj> <task>
             subj_id, task = get_offline_args(description="EEG Viewer - Offline")
-            view_offline(subj_id, task)
+            view_offline(subj_id, task, band)
         else:
             subj, sess, ncl, task, model = get_standard_args(description="EEG Viewer - Online")
-            view_online(subj, sess, ncl, task, model)
+            view_online(subj, sess, ncl, task, model, band)
     except Exception as e:
         print(f"\n[ERROR] {e}")
         sys.exit(1)
