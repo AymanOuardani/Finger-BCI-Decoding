@@ -117,12 +117,32 @@ ICA_Scripts/
   fill_correlation_evolution.py   Fills Ressources/Correlation_Evolution.ods (per-subject sheet).
   fill_energy_table.py      Builds Ressources/Sujet_XX.ods (per-trial energy + energy↔task corr + evolution).
 
+  --- energy ↔ task analyses (see ICA_Scripts/README.md §4) ---
+  energy_stats.py           Shared library: energy extraction (any band), per-class 0.5×IQR cleaning,
+                            metrics (pearson/auc/rankbiserial), AUTO+MANUEL artefact partitions.
+                            NOT an entry point — every analysis below goes through it.
+  excel_io.py               openpyxl helper: write_sheet(path, sheet, header, rows) replaces one sheet
+                            and preserves the others. Used by every .xlsx output.
+  corr_maps.py              tasks × sources heatmaps.  python corr_maps.py <subj> [metric] [band] [task]
+  corr_distributions.py     Distribution over the 128 sources, Artefact vs Non-Artefact, separation
+                            metrics drawn on the figure.
+  fill_separation_metrics.py  → Ressources/Separation_Metrics.xlsx (AUC on |r|, Cohen's d, p-value).
+  fill_source_metrics.py    → Ressources/Source_Metrics.xlsx (per-source metric suite, one recording).
+  viz_source_energy.py      Per-source diagnostic figures; modes: trials | bands | sorted.
+  viz_source_spectrum.py    Welch spectrum of one source; modes: task | full.
+  verify_energy.py          Audit: trial windows vs .mat markers, energy re-derived explicitly.
+
 ERD_Scripts/                Per-finger ERD topographies (Morlet), single-subject + group, paper method.
 Analysis/                   Accuracy distribution / evolution plots.
-Subjects Reports/           generate_subject_report.py + run_all_reports.py → per-subject LaTeX report.
+Subjects Reports/           generate_subject_report.py + run_all_reports.py → per-subject Excel recap
+                            (Ressources/Subject_Reports.xlsx, sheets S{XX}_Accuracy / S{XX}_Figures).
 clean_ods_formulas.py       Repairs LibreOffice formula corruption in .ods (see §7). One-shot or --watch.
-Ressources/                 Tracking.ods, Sujet_XX.ods, Correlation_Evolution.ods, Excel DATA.xlsx.
+Ressources/                 Tracking.ods, Sujet_XX.ods, Correlation_Evolution.ods, Excel DATA.xlsx,
+                            Separation_Metrics.xlsx, Source_Metrics.xlsx, Subject_Reports.xlsx.
 ```
+
+**No script emits LaTeX.** Numeric results go to `.xlsx` in `Ressources/` via `excel_io.write_sheet`;
+figures stay PNG under `RESULTS_ROOT`.
 
 ---
 
@@ -193,6 +213,15 @@ via `Functions._get_namespaces`, modify the target `<table>`, and rewrite the zi
   — viridis, scale **0–1** (|correlation|). Bands: Broadband/Alpha(8-13)/Beta(13-30)/Beta+2(30-40).
 - Energy↔task heatmaps (`fill_energy_table.py`): `…/Week 8/Energy Correlation Maps/S{XX}/<Band>/`
   — **RdBu_r, signed, scale -1..+1** (+1 red, -1 blue), EOG/EMG artifact source indices in red on the x-axis.
+- Energy↔task maps (`corr_maps.py`): `config.CORR_MAPS_DIR/S{XX}/<Band>/` — RdBu_r, scale from the metric
+  (pearson/rankbiserial −1..+1, auc 0..1), artefact indices red on the x-axis.
+- Correlation distributions (`corr_distributions.py`): `config.CORR_DIST_DIR/S{XX}/<Band>/`.
+- Per-source diagnostics (`viz_source_energy.py`, `viz_source_spectrum.py`): `config.SOURCE_FIGS_DIR/S{XX}/`.
+
+**Excel outputs** (all in `Ressources/`, written through `ICA_Scripts/excel_io.write_sheet`):
+`Separation_Metrics.xlsx` (one sheet per subject×band), `Source_Metrics.xlsx` (one sheet per recording),
+`Subject_Reports.xlsx` (two sheets per subject). Writing a sheet replaces that sheet only — other
+subjects already in the workbook are preserved, so batch runs accumulate safely.
 
 ---
 
@@ -215,6 +244,18 @@ python corr_heatmap.py 9 MI OFF
 python fill_energy_table.py 9
 python fill_correlation_evolution.py 9
 
+# Energy <-> task: figures (RESULTS_ROOT) then numbers (Ressources/*.xlsx)
+python corr_maps.py 9 auc                     # tasks x sources heatmaps
+python corr_distributions.py 9 pearson Beta   # Artefact vs Non-Artefact densities
+python fill_separation_metrics.py 9           # -> Separation_Metrics.xlsx
+python fill_source_metrics.py 9 1 3 Orig      # -> Source_Metrics.xlsx
+python viz_source_energy.py 4 5 3 Orig 80 bands
+python viz_source_spectrum.py 4 5 3 Orig 80
+python verify_energy.py 4 5 3 Orig 80         # audit windows + energy
+
+# Per-subject Excel recap (-> Ressources/Subject_Reports.xlsx)
+python "Subjects Reports/generate_subject_report.py" --subj 9
+
 # ODS formula repair
 python clean_ods_formulas.py                  # one-shot on Tracking.ods
 python clean_ods_formulas.py --watch          # auto-fix on every save
@@ -233,7 +274,14 @@ python clean_ods_formulas.py --watch          # auto-fix on every save
   process **per component** when needed (frugal loop) rather than filtering all 128 channels at once.
 - **Sandbox false-positives**: piping a Python heredoc (`@'...'@ | python -`) through PowerShell can be wrongly
   flagged as a destructive command (e.g. on `del`, `as z:`). **Write a temp `.py` file and run it**, then delete it.
-- **Temp scripts**: prefix with `_` (e.g. `_inspect.py`), run, then delete. Keep the repo clean.
+- **Temp scripts**: prefix with `_` (e.g. `_inspect.py`), run, then **delete in the same session**. A `_`
+  file is a scratch file, never a deliverable — 22 of them once accumulated in `ICA_Scripts/` and had to be
+  merged back into the six analysis entry points listed in §5. If a `_` script turns out to be worth keeping,
+  give it a real name and fold its shared logic into `energy_stats.py` instead of leaving it prefixed.
+- **No LaTeX**: numeric results go to `.xlsx` in `Ressources/` (via `ICA_Scripts/excel_io.write_sheet`),
+  figures stay PNG. Do not reintroduce `.tex` emission or `pdflatex` calls.
+- **No hard-coded output paths**: never write to `C:/Users/<name>/Desktop/...` from a script. Add the
+  destination to `config.py` and import it.
 - **Destructive edits** (truncating `.mat`, overwriting `.ods`): always create a `.bak` first and report what changed.
 - **MATLAB 1-based vs Python 0-based**: `event.sample` and "columns" in `.mat` are 1-based; convert carefully.
 - **Git**: default branch `main`; active work on `develop`. Commit/push only when asked; branch first if on `main`.

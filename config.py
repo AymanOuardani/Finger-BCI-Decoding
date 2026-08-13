@@ -40,6 +40,17 @@ TRACKING_ODS = os.path.join(EXCEL_DIR, "Tracking.ods")
 EXCEL_DATA   = os.path.join(EXCEL_DIR, "Excel DATA.xlsx")
 ICA_FIF_FOLDER = os.path.join(SAVE_FOLDER, "ICA_Fitted")
 
+# --- Analysis outputs -------------------------------------------------------
+# Numeric results (separation metrics, per-subject summaries) are written as
+# .xlsx workbooks into Ressources/. Figures stay PNG under RESULTS_ROOT.
+SEPARATION_XLSX   = os.path.join(EXCEL_DIR, "Separation_Metrics.xlsx")
+SOURCE_METRICS_XLSX = os.path.join(EXCEL_DIR, "Source_Metrics.xlsx")
+SUBJECT_REPORT_XLSX = os.path.join(EXCEL_DIR, "Subject_Reports.xlsx")
+
+CORR_MAPS_DIR     = os.path.join(RESULTS_ROOT, "Correlation Maps")
+CORR_DIST_DIR     = os.path.join(RESULTS_ROOT, "Correlation Distributions")
+SOURCE_FIGS_DIR   = os.path.join(RESULTS_ROOT, "Source Diagnostics")
+
 # =============================================================================
 # EEG SIGNAL PARAMETERS
 # =============================================================================

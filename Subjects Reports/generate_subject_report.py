@@ -8,7 +8,8 @@ For a given subject:
   4. Checks for missing accuracy evolution plots     → generates them
   5. Checks for missing saliency maps (2/3-class × Orig/Finetune) → generates them
   6. Reads accuracy values from Tracking.ods
-  7. Writes Subject_{XX}_Main_Study.tex into the subject's results folder
+  7. Writes the recap into Ressources/Subject_Reports.xlsx
+     (sheets S{XX}_Accuracy and S{XX}_Figures)
 
 ALL checks happen before any generation — nothing is regenerated if it already exists.
 """
@@ -66,6 +67,8 @@ SAVE_FOLDER = (
     "/Itération 1/Week 1/W1D1 - 30-03/SavePath"
 )
 TRACKING_ODS = os.path.join(EXCEL_DIR, "Tracking.ods")
+# Per-subject recap; replaces the Subject_{XX}_Main_Study.tex / pdflatex output.
+SUBJECT_REPORT_XLSX = os.path.join(EXCEL_DIR, "Subject_Reports.xlsx")
 
 sys.path.insert(0, SCRIPT_DIR)
 from Functions import load_and_filter_data, generate_eval_paths, eval_model
@@ -974,289 +977,217 @@ def check_and_generate_saliency(subj_id, subj_folder):
                 print(f"  [ERR]  {fname}: {e}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════# ══════════════════════════════════════════════════════════════════════════════
+# PART 5 — Excel report
 # ══════════════════════════════════════════════════════════════════════════════
-# PART 5 — LaTeX report
-# ══════════════════════════════════════════════════════════════════════════════
+#
+# The recap used to be emitted as a .tex file and compiled with pdflatex. It is
+# now written as a per-subject sheet of Ressources/Subject_Reports.xlsx:
+#
+#   Accuracy sheet   one row per (task, nClass, session, model), one column per
+#                    frequency band — long format, so several subjects can be
+#                    compared with a pivot rather than by reading four tables.
+#   Figures sheet    the confusion matrices, evolution plots and saliency maps,
+#                    embedded in the workbook and listed with their path on disk.
+#                    The PNGs themselves are unchanged.
 
-def read_acc(cache, task, session, nclass, modeltype, row_offset):
+BAND_COLUMNS = [
+    ("Full",  "Full Band [4-40 Hz]",  MAIN_ROW_OFFSET),
+    ("Alpha", "Alpha Band [8-13 Hz]", ALPHA_ROW_OFFSET),
+    ("Beta",  "Beta Band [13-30 Hz]", BETA_ROW_OFFSET),
+    ("Beta+", "Beta+ Band [13-40 Hz]", BETA_PLUS_ROW_OFFSET),
+]
+
+MODEL_LABELS = {"Orig": "Base", "Finetune": "Fine-tuned"}
+
+ACCURACY_HEADER = (["Subject", "Task", "nClass", "Session", "Model"] +
+                   [label for _key, label, _off in BAND_COLUMNS])
+
+FIGURES_HEADER = ["Category", "Description", "File", "Present", "Path"]
+
+
+def read_acc_value(cache, task, session, nclass, modeltype, row_offset):
+    """Majority-voting accuracy from the ODS cache, or None when absent."""
     sheet_name = f"{task}_Sess{session:02}_{nclass}Class"
     if sheet_name not in cache:
-        return "XX"
+        return None
     try:
-        val  = cache[sheet_name].iloc[
+        val = cache[sheet_name].iloc[
             SUBJ_ID + row_offset, COL_ONLINE_PERF[modeltype]]
         fval = float(val)
-        if math.isnan(fval):
-            return "XX"
-        return f"{fval:.3f}".rstrip("0").rstrip(".")
+        return None if math.isnan(fval) else round(fval, 4)
     except Exception:
-        return "XX"
+        return None
 
 
-def img_or_na(subj_folder, filename):
-    if os.path.exists(os.path.join(subj_folder, filename)):
-        return f"\\includegraphics[width=\\linewidth]{{{filename}}}"
-    return (
-        "\\fbox{\\parbox[c][2.8cm][c]{0.9\\linewidth}"
-        "{\\centering\\scriptsize N/A}}"
-    )
+def accuracy_rows(subj_id, cache):
+    """One row per condition, one column per band."""
+    rows = []
+    for task in ("ME", "MI"):
+        for nclass in (2, 3):
+            for session in (1, 2):
+                for modeltype in ("Orig", "Finetune"):
+                    row = [f"S{subj_id:02}", task, nclass, session,
+                           MODEL_LABELS[modeltype]]
+                    for _key, _label, offset in BAND_COLUMNS:
+                        row.append(read_acc_value(cache, task, session, nclass,
+                                                  modeltype, offset))
+                    rows.append(row)
+    return rows
 
 
-def cm_quad_block(subj_folder, session):
-    s  = f"{SUBJ_ID:02}"
-    se = f"{session:02}"
+def figure_inventory(subj_id, subj_folder):
+    """Every figure the report used to embed, with its presence on disk."""
+    items = []
 
-    def img(task, nclass, modeltype):
-        fname = f"S{s}_Sess{se}_{task}_{nclass}class_{modeltype}_CM.png"
-        return img_or_na(subj_folder, fname)
+    for session in (1, 2):
+        for task in ("ME", "MI"):
+            for nclass in (2, 3):
+                for modeltype in ("Orig", "Finetune"):
+                    fname = (f"S{subj_id:02}_Sess{session:02}_{task}_"
+                             f"{nclass}class_{modeltype}_CM.png")
+                    items.append((
+                        "Confusion Matrix",
+                        f"Session {session} — {task} {nclass}-class "
+                        f"{MODEL_LABELS[modeltype]}",
+                        fname))
 
-    me2b = img("ME", 2, "Orig");    me2f = img("ME", 2, "Finetune")
-    me3b = img("ME", 3, "Orig");    me3f = img("ME", 3, "Finetune")
-    mi2b = img("MI", 2, "Orig");    mi2f = img("MI", 2, "Finetune")
-    mi3b = img("MI", 3, "Orig");    mi3f = img("MI", 3, "Finetune")
+    for task in ("ME", "MI"):
+        for nclass in (2, 3):
+            task_label = "Motor Execution (ME)" if task == "ME" else "Motor Imagery (MI)"
+            items.append((
+                "Accuracy Evolution",
+                f"{task_label} — {nclass}-class",
+                evo_fname(subj_id, task, nclass)))
 
-    col_spec = (
-        "@{}"
-        r">{\centering\arraybackslash}p{0.232\linewidth}"
-        r">{\centering\arraybackslash}p{0.232\linewidth}"
-        r">{\centering\arraybackslash}p{0.232\linewidth}"
-        r">{\centering\arraybackslash}p{0.232\linewidth}"
-        "@{}"
-    )
+    for nclass, modeltype in SALIENCY_COMBOS:
+        items.append((
+            "Saliency Map",
+            f"{nclass}-class — {MODEL_LABELS[modeltype]} Model",
+            saliency_fname(nclass, modeltype)))
 
-    return (
-        f"\\noindent{{\\footnotesize\\textit{{Session {session}}}}}\n\n"
-        f"\\vspace{{4pt}}\n"
-        f"{{\\setlength{{\\tabcolsep}}{{2pt}}\n"
-        f"\\noindent\n"
-        f"\\begin{{tabular}}{{{col_spec}}}\n"
-        f"  {{\\scriptsize\\textbf{{ME — 2-class Base}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{ME — 2-class Fine-tuned}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{ME — 3-class Base}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{ME — 3-class Fine-tuned}}}} \\\\\n"
-        f"  {me2b} &\n"
-        f"  {me2f} &\n"
-        f"  {me3b} &\n"
-        f"  {me3f} \\\\[6pt]\n"
-        f"  {{\\scriptsize\\textbf{{MI — 2-class Base}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{MI — 2-class Fine-tuned}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{MI — 3-class Base}}}} &\n"
-        f"  {{\\scriptsize\\textbf{{MI — 3-class Fine-tuned}}}} \\\\\n"
-        f"  {mi2b} &\n"
-        f"  {mi2f} &\n"
-        f"  {mi3b} &\n"
-        f"  {mi3f} \\\\\n"
-        f"\\end{{tabular}}}}\n"
-    )
+    rows = []
+    for category, description, fname in items:
+        path = os.path.join(subj_folder, fname)
+        exists = os.path.exists(path)
+        rows.append([category, description, fname,
+                     "Yes" if exists else "No", path if exists else ""])
+    return rows
 
 
-def accuracy_table(cache, row_offset, caption_suffix, label_suffix):
-    def a(task, session, nclass, modeltype):
-        return read_acc(cache, task, session, nclass, modeltype, row_offset)
-
-    return (
-        f"\\begin{{table}}[H]\n"
-        f"\\centering\n"
-        f"\\small\n"
-        f"\\renewcommand{{\\arraystretch}}{{1.3}}\n"
-        f"\\caption{{Subject S{SUBJ_ID:02} — Majority voting accuracy (\\%) "
-        f"across all main study sessions. ({caption_suffix})}}\n"
-        f"\\label{{tab:s{SUBJ_ID:02}_{label_suffix}}}\n"
-        f"\\begin{{tabular}}{{llcccc}}\n"
-        f"\\toprule\n"
-        f"\\multirow{{2}}{{*}}{{\\textbf{{Task}}}} &\n"
-        f"\\multirow{{2}}{{*}}{{\\textbf{{Classes}}}} &\n"
-        f"\\multicolumn{{2}}{{c}}{{\\textbf{{Session 1}}}} &\n"
-        f"\\multicolumn{{2}}{{c}}{{\\textbf{{Session 2}}}} \\\\\n"
-        f"\\cmidrule(lr){{3-4}} \\cmidrule(lr){{5-6}}\n"
-        f"& & \\textbf{{Base}} & \\textbf{{Fine-tuned}} & "
-        f"\\textbf{{Base}} & \\textbf{{Fine-tuned}} \\\\\n"
-        f"\\midrule\n"
-        f"\\multirow{{2}}{{*}}{{ME}}\n"
-        f"  & 2-class & {a('ME',1,2,'Orig')} & {a('ME',1,2,'Finetune')} "
-        f"& {a('ME',2,2,'Orig')} & {a('ME',2,2,'Finetune')} \\\\\n"
-        f"  & 3-class & {a('ME',1,3,'Orig')} & {a('ME',1,3,'Finetune')} "
-        f"& {a('ME',2,3,'Orig')} & {a('ME',2,3,'Finetune')} \\\\\n"
-        f"\\midrule\n"
-        f"\\multirow{{2}}{{*}}{{MI}}\n"
-        f"  & 2-class & {a('MI',1,2,'Orig')} & {a('MI',1,2,'Finetune')} "
-        f"& {a('MI',2,2,'Orig')} & {a('MI',2,2,'Finetune')} \\\\\n"
-        f"  & 3-class & {a('MI',1,3,'Orig')} & {a('MI',1,3,'Finetune')} "
-        f"& {a('MI',2,3,'Orig')} & {a('MI',2,3,'Finetune')} \\\\\n"
-        f"\\bottomrule\n"
-        f"\\end{{tabular}}\n"
-        f"\\end{{table}}"
-    )
+def _style_header(ws, n_columns):
+    from openpyxl.styles import Alignment, Font, PatternFill
+    fill = PatternFill("solid", fgColor="002060")
+    font = Font(bold=True, color="FFFFFF")
+    for col in range(1, n_columns + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.freeze_panes = "A2"
 
 
-def evolution_block(subj_id, subj_folder):
-    col_w = "0.47\\linewidth"
-
-    def cell(task, nclass):
-        fname    = evo_fname(subj_id, task, nclass)
-        task_lbl = "Motor Execution (ME)" if task == "ME" else "Motor Imagery (MI)"
-        title    = f"{task_lbl} — {nclass}-class"
-        if os.path.exists(os.path.join(subj_folder, fname)):
-            content = f"\\includegraphics[width=\\linewidth]{{{fname}}}"
-        else:
-            content = (
-                f"\\fbox{{\\parbox[c][5cm][c]{{0.9\\linewidth}}"
-                f"{{\\centering\\small No data available}}}}"
-            )
-        return (
-            f"\\begin{{minipage}}[t]{{{col_w}}}\n"
-            f"  \\centering\n"
-            f"  {{\\small\\bfseries\\color{{navyblue}} {title}}}\\\\\n"
-            f"  \\vspace{{4pt}}\n"
-            f"  {content}\n"
-            f"\\end{{minipage}}"
-        )
-
-    any_exists = any(
-        os.path.exists(os.path.join(subj_folder, evo_fname(subj_id, task, nclass)))
-        for task in ("ME", "MI") for nclass in (2, 3)
-    )
-    if not any_exists:
-        return ""
-
-    me2 = cell("ME", 2);  me3 = cell("ME", 3)
-    mi2 = cell("MI", 2);  mi3 = cell("MI", 3)
-
-    return (
-        f"{me2}\\hfill\n{me3}\n\n"
-        f"\\vspace{{10pt}}\n\n"
-        f"{mi2}\\hfill\n{mi3}"
-    )
+def _autosize(ws, header, rows, cap=52):
+    from openpyxl.utils import get_column_letter
+    for idx, name in enumerate(header, start=1):
+        longest = max([len(str(name))] +
+                      [len(str(r[idx - 1])) for r in rows if idx <= len(r)
+                       and r[idx - 1] is not None] or [0])
+        ws.column_dimensions[get_column_letter(idx)].width = \
+            min(max(longest + 2, 10), cap)
 
 
-def saliency_block(subj_folder):
-    model_labels = {"Orig": "Base Model", "Finetune": "Fine-tuned Model"}
-    lines = []
+def write_subject_workbook(subj_id, subj_folder, cache, xlsx_path,
+                           embed_images=True):
+    """Write the subject's recap as two sheets of the shared workbook.
 
-    for i, (nclass, model_type) in enumerate(SALIENCY_COMBOS):
-        fname = saliency_fname(nclass, model_type)
-        title = f"{nclass}-class  —  {model_labels[model_type]}"
+    Sheets already present for other subjects are preserved; the two sheets of
+    this subject are replaced.
+    """
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Font
 
-        lines.append(
-            f"{{\\small\\bfseries\\color{{navyblue}} "
-            f"Saliency Maps — {title}}}\n\n"
-            f"\\vspace{{4pt}}\n"
-        )
-        if os.path.exists(os.path.join(subj_folder, fname)):
-            lines.append(
-                f"\\noindent\\hfil\n"
-                f"\\includegraphics[width=0.92\\linewidth]{{{fname}}}\n"
-                f"\\hfil"
-            )
-        else:
-            lines.append(
-                f"\\noindent\\hfil\n"
-                f"\\fbox{{\\parbox[c][4cm][c]{{0.6\\linewidth}}"
-                f"{{\\centering {title} saliency map "
-                f"not yet generated}}}}\n"
-                f"\\hfil"
-            )
+    os.makedirs(os.path.dirname(xlsx_path), exist_ok=True)
+    if os.path.exists(xlsx_path):
+        wb = load_workbook(xlsx_path)
+    else:
+        wb = Workbook()
+        wb.remove(wb.active)
 
-        if i < len(SALIENCY_COMBOS) - 1:
-            lines.append(
-                "\n\n\\vspace{14pt}\n"
-                "\\noindent\\rule{\\linewidth}{0.3pt}\n"
-                "\\vspace{6pt}\n"
-            )
+    acc_name = f"S{subj_id:02}_Accuracy"
+    fig_name = f"S{subj_id:02}_Figures"
+    for name in (acc_name, fig_name):
+        if name in wb.sheetnames:
+            wb.remove(wb[name])
 
-    return "\n".join(lines)
+    # ── Accuracy ──────────────────────────────────────────────────────────────
+    rows = accuracy_rows(subj_id, cache)
+    ws = wb.create_sheet(acc_name)
+    ws.append(ACCURACY_HEADER)
+    for row in rows:
+        ws.append(row)
+    _style_header(ws, len(ACCURACY_HEADER))
+    _autosize(ws, ACCURACY_HEADER, rows)
+    for col in range(6, len(ACCURACY_HEADER) + 1):
+        for cell in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+            cell[0].number_format = "0.000"
+    filled = sum(1 for r in rows for v in r[5:] if v is not None)
+    print(f"  Accuracy sheet: {len(rows)} conditions, "
+          f"{filled}/{len(rows) * len(BAND_COLUMNS)} values present")
+
+    # ── Figures ───────────────────────────────────────────────────────────────
+    fig_rows = figure_inventory(subj_id, subj_folder)
+    ws = wb.create_sheet(fig_name)
+    ws.append(FIGURES_HEADER)
+    for row in fig_rows:
+        ws.append(row)
+    _style_header(ws, len(FIGURES_HEADER))
+    _autosize(ws, FIGURES_HEADER, fig_rows)
+    present = sum(1 for r in fig_rows if r[3] == "Yes")
+    print(f"  Figures sheet : {present}/{len(fig_rows)} figures present")
+
+    if embed_images and present:
+        _embed_images(wb, fig_name, fig_rows)
+
+    for position, name in enumerate(sorted(wb.sheetnames)):
+        wb.move_sheet(name, offset=position - wb.sheetnames.index(name))
+    wb.save(xlsx_path)
+    return xlsx_path
 
 
-def generate_tex(subj_id, subj_folder, cache):
-    tbl_full      = accuracy_table(cache, MAIN_ROW_OFFSET,
-                                   "Full Frequency Band [4--40 Hz]",  "full")
-    tbl_alpha     = accuracy_table(cache, ALPHA_ROW_OFFSET,
-                                   "Alpha Band Only [8--13 Hz]",      "alpha")
-    tbl_beta      = accuracy_table(cache, BETA_ROW_OFFSET,
-                                   "Beta Band Only [13--30 Hz]",      "beta")
-    tbl_beta_plus = accuracy_table(cache, BETA_PLUS_ROW_OFFSET,
-                                   "Beta+ Band Only [13--40 Hz]",     "betaplus")
+def _embed_images(wb, fig_name, fig_rows):
+    """Drop the figures below the inventory, grouped by category."""
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Font
 
-    evo_content = evolution_block(subj_id, subj_folder)
-    evo_page = (
-        f"\\newpage\n\n"
-        f"%% ── ACCURACY EVOLUTION CURVES ──────────────────────────────────\n"
-        f"\\begin{{center}}\n"
-        f"  {{\\large\\bfseries\\color{{navyblue}} "
-        f"Accuracy Evolution — Full vs Alpha vs Beta vs Beta+}}\\\\\n"
-        f"  {{\\small Session 1 Base $\\rightarrow$ Session 1 Fine-tuned "
-        f"$\\rightarrow$ Session 2 Base $\\rightarrow$ Session 2 Fine-tuned}}\n"
-        f"\\end{{center}}\n\n"
-        f"\\vspace{{6pt}}\n"
-        f"{evo_content}\n"
-    ) if evo_content else ""
+    ws = wb[fig_name]
+    row_cursor = len(fig_rows) + 3
+    current_category = None
+    embedded = 0
 
-    cm_s1 = cm_quad_block(subj_folder, 1)
-    cm_s2 = cm_quad_block(subj_folder, 2)
-    sal   = saliency_block(subj_folder)
+    for category, description, _fname, present, path in fig_rows:
+        if present != "Yes":
+            continue
+        if category != current_category:
+            cell = ws.cell(row=row_cursor, column=1, value=category)
+            cell.font = Font(bold=True, size=13, color="002060")
+            current_category = category
+            row_cursor += 2
 
-    return f"""\\documentclass[a4paper, 12pt]{{article}}
+        ws.cell(row=row_cursor, column=1, value=description).font = Font(bold=True)
+        try:
+            img = XLImage(path)
+            scale = min(1.0, 620 / float(img.width or 620))
+            img.width = int((img.width or 620) * scale)
+            img.height = int((img.height or 480) * scale)
+            ws.add_image(img, f"A{row_cursor + 1}")
+            row_cursor += int(img.height / 19) + 4
+            embedded += 1
+        except Exception as exc:
+            ws.cell(row=row_cursor + 1, column=1, value=f"[could not embed: {exc}]")
+            row_cursor += 3
 
-\\usepackage[utf8]{{inputenc}}
-\\usepackage[T1]{{fontenc}}
-\\usepackage{{graphicx}}
-\\usepackage{{float}}
-\\usepackage[margin=1.2cm, top=1.5cm]{{geometry}}
-\\usepackage{{caption}}
-\\usepackage{{multirow}}
-\\usepackage{{booktabs}}
-\\usepackage{{xcolor}}
-\\usepackage{{array}}
-\\usepackage{{tabularx}}
-
-\\definecolor{{navyblue}}{{RGB}}{{0, 32, 96}}
-\\captionsetup{{font=small, labelfont=bf}}
-
-\\begin{{document}}
-
-\\begin{{center}}
-    {{\\Large\\bfseries\\color{{navyblue}} Subject S{subj_id:02} — Main Study Recap}}\\\\[4pt]
-    {{\\small Motor Execution (ME) \\& Motor Imagery (MI) — Sessions 1 \\& 2}}
-\\end{{center}}
-
-\\vspace{{4pt}}
-\\noindent\\rule{{\\linewidth}}{{0.8pt}}
-\\vspace{{4pt}}
-
-%% ── ACCURACY TABLES ─────────────────────────────────────────────────────────
-{tbl_full}
-
-\\vspace{{8pt}}
-{tbl_alpha}
-
-\\vspace{{8pt}}
-{tbl_beta}
-
-\\vspace{{8pt}}
-{tbl_beta_plus}
-
-{evo_page}
-\\newpage
-
-%% ── CONFUSION MATRICES — FULL BAND [4-40 Hz] ────────────────────────────────
-{{\\small\\bfseries\\color{{navyblue}} Confusion Matrices — Full Band [4--40 Hz]}}
-
-\\vspace{{6pt}}
-{cm_s1}
-
-\\vspace{{10pt}}
-\\noindent\\rule{{\\linewidth}}{{0.3pt}}
-\\vspace{{6pt}}
-
-{cm_s2}
-
-\\newpage
-
-%% ── SALIENCY MAPS ────────────────────────────────────────────────────────────
-{sal}
-
-\\end{{document}}
-"""
+    print(f"  Embedded {embedded} figure(s) into the workbook")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1282,17 +1213,12 @@ def main():
     # Step 4 ── saliency maps ──────────────────────────────────────────────────
     check_and_generate_saliency(SUBJ_ID, subj_folder)
 
-    # Step 5 ── generate .tex ──────────────────────────────────────────────────
-    print(f"\n── Generating report for Subject S{SUBJ_ID:02} ───────────────")
-    tex      = generate_tex(SUBJ_ID, subj_folder, cache)
-    out_path = os.path.join(
-        subj_folder, f"Subject_{SUBJ_ID:02}_Main_Study.tex")
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(tex)
-
-    print(f"  Saved: {out_path}")
-    print(f"\nCompile with:")
-    print(f'  pdflatex -output-directory "{subj_folder}" "{out_path}"')
+    # Step 5 ── write the Excel recap ──────────────────────────────────────────
+    print(f"\n── Writing Excel report for Subject S{SUBJ_ID:02} ───────────")
+    out_path = write_subject_workbook(
+        SUBJ_ID, subj_folder, cache, SUBJECT_REPORT_XLSX)
+    print(f"\n  Saved: {out_path}")
+    print(f"  Sheets: S{SUBJ_ID:02}_Accuracy, S{SUBJ_ID:02}_Figures")
 
 
 if __name__ == "__main__":
