@@ -138,6 +138,9 @@ def plot_normalized_comparison(erd_raw, erd_ica, band_label, finger_names,
 def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
                title_prefix, save_name,
                tmax=TMAX_ONLINE, task_win=TASK_WIN_ONLINE):
+    """Loop over ALL_SUBJECTS, average the per-subject Before/After-ICA ERD
+    maps across the group, normalise each averaged map (max -> 0, see
+    `_normalize_to_zero_max`), and save the comparison figure."""
     band = next((k for k in BANDS_CONFIG if k.lower() == band_raw.lower()), band_raw)
     if band not in BANDS_CONFIG:
         print(f"[ERROR] band must be one of: {list(BANDS_CONFIG.keys())}")
@@ -268,6 +271,8 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between online and
+    offline group modes and drives `_run_group`."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()

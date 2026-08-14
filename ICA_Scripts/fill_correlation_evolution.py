@@ -119,12 +119,19 @@ def _process_recording(subj_id, task, session, nclass, model):
         corr = ch._compute_corr_matrix(band_sources, sfreq, tasks_z)   # (n_tasks, n_comp)
         per_task = {}
         for t_idx, tname in enumerate(tasks_list):
+            # Sum |correlation| across ONLY the artefact-flagged sources: a
+            # high sum means the task signal is well explained by artefacts
+            # rather than by neural activity.
             per_task[tname] = float(sum(corr[t_idx, c] for c in artifact_comps))
         results[band_label] = per_task
     return results, artifact_comps
 
 
 def fill_subject(subj_id, task="MI", model="Orig"):
+    """Compute and write all cells of the subject's sheet in
+    Correlation_Evolution.ods: for every available session, band and task,
+    the sum of |correlation| over the auto-detected EOG/EMG artefact sources.
+    """
     sheet = f"Sujet{subj_id}"
     print(f"\n=== Filling '{sheet}' in {ODS_PATH} ===")
 
@@ -147,6 +154,8 @@ def fill_subject(subj_id, task="MI", model="Orig"):
                 print("      [skip] no task annotations.")
                 continue
             for band_label, _l, _h, base_row in BANDS:
+                # Sheet layout: within a band's block, "Session 1" sits at
+                # base_row, and each following session is one row further down.
                 row = base_row + (sess - 1)
                 per_task = results[band_label]
                 for tname, col in col_map.items():
@@ -163,6 +172,7 @@ def fill_subject(subj_id, task="MI", model="Orig"):
 
 
 def main():
+    """CLI entry point: parse argv and fill the requested subject's sheet."""
     if len(sys.argv) < 2:
         print("Usage: python fill_correlation_evolution.py <subj> [<task> <model>]")
         sys.exit(1)

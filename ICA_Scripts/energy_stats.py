@@ -57,8 +57,10 @@ CLASS_COLORS = {"Thumb": "#1f77b4", "Index": "#ff7f0e",
                 "Middle": "#2ca02c", "Pinky": "#d62728"}
 
 IQR_K = 0.5          # Tukey fence half-width used everywhere for outlier removal
-N_COMPONENTS = 128
+N_COMPONENTS = 128   # fixed ICA decomposition size for all subjects/recordings
 
+# Short filename-safe tags used to distinguish the two model conditions in
+# saved figure/sheet names (Orig = trained on raw data, Finetune = fine-tuned).
 MODEL_TAG = {"Orig": "1_Orig", "Finetune": "2_Finetune"}
 
 
@@ -186,6 +188,7 @@ def trial_energy(subj, sess, nclass, model, task="MI", band="Fullband"):
     classes = np.array([c for c, _s, _e in trials])
     E = np.empty((len(trials), data.shape[0]))
     for ti, (_c, start, end) in enumerate(trials):
+        # Energy = sum of squared samples over the trial window (per source).
         E[ti] = np.sum(data[:, start:end] ** 2, axis=1)
 
     del raw, sources, data
@@ -270,6 +273,8 @@ def auc_matrix(E, classes, fingers):
     Mann-Whitney U. 0.5 = chance.
     """
     n, ncomp = E.shape
+    # Rank each source's energy independently across ALL trials (column-wise),
+    # using average ranks so ties are handled the same way scipy does.
     ranks = np.apply_along_axis(rankdata, 0, E)
     out = np.full((len(fingers), ncomp), 0.5)
     for fi, finger in enumerate(fingers):
@@ -278,6 +283,8 @@ def auc_matrix(E, classes, fingers):
         n0 = n - n1
         if n1 == 0 or n0 == 0:
             continue
+        # Mann-Whitney U from the sum of in-class ranks (Wilcoxon rank-sum
+        # identity): U = R1 - n1*(n1+1)/2. AUC = U / (n1*n0).
         U = ranks[inside].sum(axis=0) - n1 * (n1 + 1) / 2.0
         out[fi] = U / (n1 * n0)
     return out
@@ -298,9 +305,13 @@ def pearson_matrix(E, classes, fingers, k=IQR_K):
     ncomp = E.shape[1]
     out = np.empty((len(fingers), ncomp))
     for c in range(ncomp):
+        # Outlier trials are re-evaluated PER SOURCE (each column of E has its
+        # own energy scale), then Pearson uses only the surviving trials.
         keep = per_class_keep(E[:, c], classes, k)
         cls_kept, energy_kept = classes[keep], E[keep, c]
         for fi, finger in enumerate(fingers):
+            # One-vs-rest binary membership vector for this finger -> point-
+            # biserial correlation, equivalent to Pearson with a 0/1 variable.
             out[fi, c] = pearson(energy_kept, (cls_kept == finger).astype(float))
     return out
 
@@ -338,6 +349,9 @@ def separation(values, artifacts, n_components=None):
     art_idx = [c for c in range(ncomp) if c in artifacts]
     non_idx = [c for c in range(ncomp) if c not in artifacts]
 
+    # Compare groups on |r| (magnitude of association), not signed r, since
+    # the question is whether artefacts carry MORE task information, not in
+    # which direction.
     a = np.abs(values[art_idx])
     b = np.abs(values[non_idx])
     out = {
@@ -348,6 +362,8 @@ def separation(values, artifacts, n_components=None):
         "significant": "",
     }
     if len(a) >= 2 and len(b) >= 2:
+        # Mann-Whitney U tests whether |r| tends to be larger in group a
+        # (artefacts) than group b (non-artefacts); U/(na*nb) is its AUC form.
         U, p = mannwhitneyu(a, b, alternative="two-sided")
         out["auc"] = float(U / (len(a) * len(b)))
         out["cohens_d"] = cohens_d(a, b)

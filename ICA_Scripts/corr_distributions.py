@@ -71,8 +71,17 @@ def _separation_handles(values, artifacts, n_components):
 
 def plot_distribution(values, artifacts, n_components, subj, task, sess, nclass,
                       model, finger, metric, band, art_label, save_path):
+    """Render and save one Artefact-vs-Non-Artefact density figure for a single
+    (session, model, nClass, finger, artefact definition) combination.
+
+    `values` holds the per-source association metric (one value per ICA
+    component); `artifacts` is the set of component indices considered
+    artefactual under the given definition. The figure overlays a KDE per
+    group plus mean/median markers and the separation metrics legend.
+    """
     metric_label, _fn, (vmin, vmax) = es.METRICS[metric]
     values = np.asarray(values, float)
+    # Partition the 128 source indices into the two groups being compared.
     art_idx = [c for c in range(n_components) if c in artifacts]
     non_idx = [c for c in range(n_components) if c not in artifacts]
 
@@ -84,6 +93,8 @@ def plot_distribution(values, artifacts, n_components, subj, task, sess, nclass,
     fig.text(0.5, 0.905, f"Artefacts = {art_label}",
              ha="center", va="top", fontsize=9, color="dimgray")
 
+    # Pad the x range by 5% of the metric's span so the KDE curves don't get
+    # clipped right at the plot edge.
     pad = 0.05 * (vmax - vmin)
     x_grid = np.linspace(vmin - pad, vmax + pad, 800)
     handles = []
@@ -94,6 +105,8 @@ def plot_distribution(values, artifacts, n_components, subj, task, sess, nclass,
         vals = values[idx]
 
         if len(vals) < 2:
+            # gaussian_kde needs at least 2 points to estimate a bandwidth;
+            # fall back to a raw scatter (rug plot) of the individual values.
             ax.scatter(vals, np.full_like(vals, dot_y), color=col_kde,
                        alpha=0.6, s=20, zorder=5)
             handles.append(Line2D([0], [0], marker="o", linestyle="none",
@@ -106,6 +119,8 @@ def plot_distribution(values, artifacts, n_components, subj, task, sess, nclass,
         ax.fill_between(x_grid, density, alpha=0.18, color=col_kde)
         ax.axvline(vals.mean(), color=col_mean, linestyle="--", linewidth=1.5)
         ax.axvline(np.median(vals), color=col_med, linestyle=":", linewidth=1.5)
+        # Rug plot: each source's raw value at a fixed y-offset (_DOT_Y) below
+        # the density curves, so individual sources stay visible under the KDE.
         ax.scatter(vals, np.full_like(vals, dot_y), color=col_kde,
                    alpha=0.55, s=16, zorder=5)
         handles += [
@@ -138,6 +153,9 @@ def plot_distribution(values, artifacts, n_components, subj, task, sess, nclass,
 
 
 def main():
+    """CLI entry point: parse argv, resolve the requested artefact splits, and
+    generate one distribution figure per (session, model, finger, artefact
+    definition) available for the subject."""
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)

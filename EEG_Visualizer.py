@@ -65,6 +65,8 @@ def apply_band_filter(raw, band):
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband"):
+    """Load and concatenate all .mat trial files for one online (BCI) session into an MNE Raw object,
+    resampling to SRATE if needed and attaching event annotations for viewing."""
     folder    = get_folder(subj_id, task, session, nclass, model_type)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -84,6 +86,8 @@ def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband")
         event   = mat["event"]
 
         if srate != SRATE:
+            # Recording sampling rate differs from the project-wide SRATE: resample
+            # the signal (Fourier-based) so all sessions share a common time base.
             n_new   = int(signals.shape[1] * SRATE / srate)
             signals = scipy.signal.resample(signals, n_new, axis=1)
 
@@ -107,6 +111,7 @@ def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband")
 
     data   = np.concatenate(all_signals, axis=1)
     info, _ = make_info()
+    # Source data is in microvolts; MNE expects SI units (volts) internally.
     raw    = mne.io.RawArray(data * 1e-6, info, verbose=False)
 
     if all_events:
@@ -116,6 +121,7 @@ def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband")
         )
         raw.set_annotations(annot)
 
+    # Remove 60 Hz mains-power line noise and its harmonics up to 500 Hz.
     raw.notch_filter(np.arange(60, 501, 60))
     apply_band_filter(raw, band)
 
@@ -127,6 +133,7 @@ def load_online_raw(subj_id, task, session, nclass, model_type, band="Fullband")
 
 
 def load_offline_raw(subj_id, task, band="Fullband"):
+    """Load and concatenate all .mat trial files for one offline (non-BCI) recording into an MNE Raw object."""
     folder    = get_offline_folder(subj_id, task)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -150,6 +157,7 @@ class TopoHighlighter:
     """Persistent topomap. Call .highlight(ch_name) to mark a channel in red."""
 
     def __init__(self, info, ch_names):
+        """Create the topomap figure and draw the unhighlighted (base) sensor layout."""
         self.info     = info
         self.ch_names = ch_names
         self.fig, self.ax = plt.subplots(figsize=(6, 6))
@@ -160,7 +168,10 @@ class TopoHighlighter:
         self.fig.canvas.draw()
 
     def _draw_base(self, highlighted_idx=None):
+        """Redraw the topomap; if `highlighted_idx` is given, mark that electrode in red with a label."""
         self.ax.clear()
+        # A dummy value map where only the selected channel is "hot" (1.0) lets us
+        # reuse plot_topomap purely as a way to render the sensor layout / highlight.
         values = np.zeros(len(self.ch_names))
         if highlighted_idx is not None:
             values[highlighted_idx] = 1.0
@@ -210,6 +221,7 @@ class TopoHighlighter:
             )
 
     def highlight(self, ch_name):
+        """Redraw the topomap with the given channel name highlighted, if it exists."""
         ch_name = ch_name.strip()
         if ch_name not in self.ch_names:
             return
@@ -276,6 +288,10 @@ def launch_viewer(raw, subj_id, task, session, nclass, model_type, band="Fullban
                 topo.highlight(text)
 
     def on_click(event):
+        # Fallback hit-test: MNE's channel-name labels aren't always pickable
+        # artists, so scan text artists in the clicked axes and match by
+        # vertical position (channel row) when the click lands left of x=0
+        # (i.e. in the channel-name margin rather than the signal trace).
         if event.inaxes is None:
             return
         for artist in event.inaxes.get_children():
@@ -298,6 +314,7 @@ def launch_viewer(raw, subj_id, task, session, nclass, model_type, band="Fullban
 # ── Entry points ──────────────────────────────────────────────────────────────
 
 def view_online(subj, sess, ncl, task, model, band="Fullband"):
+    """Load one online-session recording and launch the interactive viewer for it."""
     print("=" * 55)
     print("   STING EEG Signal Viewer")
     print("=" * 55)
@@ -308,6 +325,7 @@ def view_online(subj, sess, ncl, task, model, band="Fullband"):
 
 
 def view_offline(subj_id, task, band="Fullband"):
+    """Load one offline recording and launch the interactive viewer for it."""
     print("=" * 55)
     print("   STING EEG Signal Viewer - OFFLINE")
     print("=" * 55)
@@ -317,6 +335,7 @@ def view_offline(subj_id, task, band="Fullband"):
 
 
 def main():
+    """CLI entry point: parses arguments (online vs offline mode, optional band) and launches the viewer."""
     try:
         # Optional last argument selects the band-pass (default Fullband).
         band = "Fullband"

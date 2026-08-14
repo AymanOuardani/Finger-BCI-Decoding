@@ -784,6 +784,11 @@ def eval_model(data, label, model_path, params, plot_save_path=None):
 
 
 def split_train(data, label, save_name, params, kernels, chans, samples, batch_size, epochs, nTrial, nChan, DesiredLen):
+    """
+    Split raw trial-level EEG into train/validation sets (80/20, at trial level)
+    and run the full preprocessing pipeline (segment -> downsample -> bandpass ->
+    z-score -> one-hot labels -> reshape) on each split, ready for EEGNet.fit().
+    """
 
     # Random permutation to shuffle trials before splitting
     shuffled_idx = np.random.permutation(nTrial)
@@ -847,7 +852,12 @@ def split_train(data, label, save_name, params, kernels, chans, samples, batch_s
 
 
 def data_eval(data, label, params, kernels, chans, samples, nTrial, nChan, DesiredLen):
-    
+    """
+    Apply the same segment -> downsample -> bandpass -> z-score -> reshape pipeline
+    as split_train, but on the full (unsplit) dataset for evaluation. Returns
+    I_eval, the per-segment trial index used later for majority voting.
+    """
+
     segment_size = int(params['windowlen'] * params['srate'])
     step_size    = 128
     
@@ -1339,6 +1349,8 @@ def _update_cache(cache, sheet_name, row_idx, col_idx, value):
 
 
 def _get_namespaces(xml_bytes):
+    """Extract XML namespace prefix -> URI mappings from an ODF content.xml, by
+    regex-scanning xmlns declarations (avoids a full namespace-aware XML parse)."""
     ns = {}
     for prefix, uri in re.findall(
             rb'xmlns(?::([a-zA-Z0-9_-]*))?="([^"]+)"', xml_bytes):
@@ -1348,6 +1360,8 @@ def _get_namespaces(xml_bytes):
 
 
 def _new_value_cell(TC, VTYPE, VAL, TP, value):
+    """Build a single ODF <table:table-cell> XML element holding a float value
+    (both as the office:value attribute and as displayed text)."""
     cell = ET.Element(TC)
     cell.set(VTYPE, "float")
     cell.set(VAL, str(round(value, 4)))
@@ -1357,6 +1371,8 @@ def _new_value_cell(TC, VTYPE, VAL, TP, value):
 
 
 def _clone_empty(src, count, REP):
+    """Clone `src` as an empty placeholder element carrying a repeat count
+    (used to preserve the surrounding repeated/merged cells when splitting a run)."""
     clone = ET.Element(src.tag)
     if count > 1:
         clone.set(REP, str(count))
@@ -1364,6 +1380,17 @@ def _clone_empty(src, count, REP):
 
 
 def _set_cell(row_elem, col_idx, value, ns_map):
+    """
+    Overwrite the cell at `col_idx` within an ODF <table:table-row> element,
+    in place, with a float `value`.
+
+    ODF spreadsheet rows compress runs of identical cells using a
+    number-columns-repeated attribute, so a target column may fall inside a
+    larger repeated run rather than being its own element. This walks the
+    row's cell runs to find the run containing col_idx, then splits that run
+    into (before-run, new single-value cell, after-run) so only the target
+    column is modified and all other columns keep their original repeat count.
+    """
     T   = ns_map["table"];  O = ns_map["office"];  TXT = ns_map["text"]
     TC    = f"{{{T}}}table-cell"
     COV   = f"{{{T}}}covered-table-cell"
@@ -1372,11 +1399,14 @@ def _set_cell(row_elem, col_idx, value, ns_map):
     VAL   = f"{{{O}}}value"
     TP    = f"{{{TXT}}}p"
 
+    # Expand the row into a flat list of (element, repeat_count) runs so column
+    # positions can be tracked as a running total across possibly-merged cells.
     flat = []
     for child in list(row_elem):
         if child.tag in (TC, COV):
             flat.append([child, int(child.get(REP, "1"))])
 
+    # Locate which run contains col_idx, and the offset within that run.
     cursor = 0; seg_idx = None; offset = 0
     for i, (elem, rep) in enumerate(flat):
         if cursor <= col_idx < cursor + rep:
@@ -1384,6 +1414,8 @@ def _set_cell(row_elem, col_idx, value, ns_map):
         cursor += rep
 
     if seg_idx is None:
+        # col_idx is past the end of the row's existing cells: pad with an
+        # empty repeated run to reach it, then append the new value cell.
         existing = sum(r for _, r in flat)
         gap = col_idx - existing
         if gap > 0:
@@ -1391,6 +1423,9 @@ def _set_cell(row_elem, col_idx, value, ns_map):
             flat.append([pad, gap])
         flat.append([_new_value_cell(TC, VTYPE, VAL, TP, value), 1])
     else:
+        # col_idx falls inside an existing (possibly repeated) run: split it
+        # into up to 3 pieces — untouched cells before, the new value cell,
+        # untouched cells after — preserving the original run's formatting.
         src, rep = flat[seg_idx]
         pieces = []
         if offset > 0:
@@ -1410,6 +1445,7 @@ def _set_cell(row_elem, col_idx, value, ns_map):
 
 
 def _find_table(root, ns_map, table_name):
+    """Return the <table:table> XML element whose name matches `table_name` (sheet name)."""
     T = ns_map["table"]
     for elem in root.iter(f"{{{T}}}table"):
         if elem.get(f"{{{T}}}name") == table_name:
@@ -1418,6 +1454,12 @@ def _find_table(root, ns_map, table_name):
 
 
 def _expand_rows(table_elem, ns_map):
+    """
+    In place, unroll ODF <table:table-row> elements that use a
+    number-rows-repeated attribute into that many individual row elements.
+    This lets callers address a row by a plain 0-based row_idx (as in
+    write_to_ods) without having to account for compressed repeated rows.
+    """
     T  = ns_map["table"]
     TR = f"{{{T}}}table-row"
     RR = f"{{{T}}}number-rows-repeated"
@@ -1648,6 +1690,8 @@ def get_ica_fif_path(subj_id, task, session=0, nclass=0, model_type="Orig",
 # =============================================================================
 
 def compute_slopes(ica, raw_filt, fmin=7, fmax=45):
+    """Return the log-log PSD slope (fmin-fmax Hz) of every ICA source component,
+    used as an EMG/muscle-artifact indicator (steep positive slope = broadband muscle noise)."""
     sources  = ica.get_sources(raw_filt)
     spectrum = sources.compute_psd(fmin=fmin, fmax=fmax, picks="misc")
     psds, freqs = spectrum.get_data(return_freqs=True)
@@ -1658,6 +1702,11 @@ def compute_slopes(ica, raw_filt, fmin=7, fmax=45):
 
 def compute_exclusions(ica, raw_filt, muscle_thresh, eog_thresh, ch_names,
                        manual_extra=None, eog_scores=None, emg_scores=None):
+    """
+    Combine EOG-correlation and EMG-slope thresholding (plus any manually
+    added component indices) into one exclusion list for ICA cleaning.
+    Returns (all_excluded, eog_indices, muscle_indices).
+    """
     n_comp = ica.n_components_
     if emg_scores is None:
         _, emg_scores = find_EMG(ica, raw_filt, threshold=muscle_thresh,
@@ -1676,7 +1725,11 @@ def compute_exclusions(ica, raw_filt, muscle_thresh, eog_thresh, ch_names,
 
 
 class TopoHighlighter:
+    """Persistent topomap figure that highlights a single selected electrode in red
+    (used by the raw/ICA-cleaned signal viewers to link clicked channel names to sensor position)."""
+
     def __init__(self, info, ch_names):
+        """Create the topomap figure and draw the unhighlighted (base) sensor layout."""
         self.info     = info
         self.ch_names = ch_names
         self.fig, self.ax = plt.subplots(figsize=(6, 6))
@@ -1687,7 +1740,10 @@ class TopoHighlighter:
         self.fig.canvas.draw()
 
     def _draw_base(self, highlighted_idx=None):
+        """Redraw the topomap; if `highlighted_idx` is given, mark that electrode in red with a label."""
         self.ax.clear()
+        # A dummy value map where only the selected channel is "hot" (1.0) lets us
+        # reuse plot_topomap purely as a way to render the sensor layout / highlight.
         values = np.zeros(len(self.ch_names))
         if highlighted_idx is not None:
             values[highlighted_idx] = 1.0
@@ -1722,6 +1778,7 @@ class TopoHighlighter:
                               fontsize=11, color="gray")
 
     def highlight(self, ch_name):
+        """Redraw the topomap with the given channel name highlighted, if it exists."""
         ch_name = ch_name.strip()
         if ch_name not in self.ch_names:
             return
@@ -1783,6 +1840,8 @@ def load_online_raw_pair(subj_id, task, session, nclass, model_type):
 
 
 def launch_viewer(raw, raw_clean, subj_id, task, session=0, nclass=0, model_type="Orig", event_id=None, ica=None):
+    """Open side-by-side blocking MNE signal browsers for the raw and ICA-cleaned recordings,
+    plus a linked topomap that highlights whichever channel name is clicked in either window."""
     info, ch_names = make_info()
     if event_id is None: event_id = {"Thumb": 1, "Index": 2, "Middle": 3, "Pinky": 4, "TrialEnd": 9}
     model_label = "Base Model" if model_type == "Orig" else "Fine-tuned Model"
@@ -1941,6 +2000,17 @@ def _compute_erd_for_inspector(raw_orig, raw_clean, task, session, nclass,
 def interactive_ica_setup(raw_filt, ica, slopes, raw_orig, subj_id,
                            task, session, nclass, model_type, manual_extra=None,
                            erd_vlim=None, erd_cmap=None):
+    """
+    Launch the interactive ICA component inspector (matplotlib GUI).
+
+    Shows a paginated grid of ICA source topographies/timeseries plus EOG- and
+    muscle-threshold sliders; components above threshold (or manually clicked)
+    are marked for exclusion. On confirmation the selected components are
+    removed and the cleaned signal / ERD comparison can be inspected before
+    saving. This function owns a large amount of GUI wiring (sliders, buttons,
+    page navigation, ERD preview) and does not return a value — state lives in
+    the `state` dict and is applied to `ica.exclude` as the user interacts.
+    """
     ch_names     = raw_filt.info["ch_names"]
     n_comp       = ica.n_components_
     sfreq        = raw_filt.info["sfreq"]

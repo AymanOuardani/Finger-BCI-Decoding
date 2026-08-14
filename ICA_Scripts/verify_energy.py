@@ -48,6 +48,8 @@ from config import TASK_LABELS, FINGER_LABEL
 
 
 def main():
+    """CLI entry point: run the six alignment/energy sanity checks described
+    in the module docstring for one recording and print the results."""
     subj = int(sys.argv[1]) if len(sys.argv) > 1 else 4
     sess = int(sys.argv[2]) if len(sys.argv) > 2 else 5
     nclass = int(sys.argv[3]) if len(sys.argv) > 3 else 3
@@ -66,6 +68,8 @@ def main():
     # ── 1. Raw markers in the FIRST .mat (ground truth) ──────────────────────
     mat = scipy.io.loadmat(mats[0])
     eeg, event = mat["eeg"], mat["event"]
+    # scipy.io.loadmat wraps MATLAB structs in nested 1x1 object arrays, hence
+    # the repeated [0][0] indexing to reach the scalar/array field values.
     fs_mat = int(eeg["fsample"][0][0][0][0])
     n_samples_run1 = eeg["data"][0][0].shape[1]
     print(f"[1] run1 .mat: fsample={fs_mat} Hz, nSamples={n_samples_run1}")
@@ -76,6 +80,8 @@ def main():
         evt = event[0, i]
         etype = str(evt["type"][0]).strip()
         sample = int(evt["sample"][0][0])                  # 1-based
+        # MATLAB event timestamps are 1-based sample indices; subtracting 1
+        # below converts to the 0-based indexing used by the Python pipeline.
         if etype == "Target":
             value = int(evt["value"][0][0])
             mat_targets.append((FINGER_LABEL.get(value, f"?{value}"), sample - 1))

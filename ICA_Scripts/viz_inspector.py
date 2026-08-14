@@ -29,6 +29,8 @@ from Functions import (
 
 
 def inspect_online(subj, sess, ncl, task, model):
+    """Load the online recording and open the interactive ICA threshold
+    inspector (fit/load ICA, then apply_ica_to_raw drives the UI)."""
     print("=" * 60)
     print(f"  ICA Inspector: S{subj:02} Sess{sess:02} | {task} {ncl}-class | {model}")
     print("=" * 60)
@@ -52,6 +54,8 @@ def inspect_online(subj, sess, ncl, task, model):
 
 
 def inspect_offline(subj_id, task):
+    """Load the offline recording and open the interactive ICA threshold
+    inspector (fit/load ICA, then apply_ica_to_raw drives the UI)."""
     print("=" * 60)
     print(f"  ICA Inspector: S{subj_id:02} | {task} (Offline)")
     print("=" * 60)
@@ -76,6 +80,8 @@ def inspect_offline(subj_id, task):
 
 
 def main():
+    """CLI entry point: dispatch to the offline or online inspector based on
+    the trailing 'OFF' argument."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.remove(sys.argv[-1])  # drop "OFF" before argparse sees it

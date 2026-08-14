@@ -109,6 +109,8 @@ def plot_one_task(task_df, finger, subj_id, task,
         dot_y = _DOT_Y[grp_label]
 
         if len(vals) < 2:
+            # gaussian_kde requires at least 2 points to estimate a bandwidth;
+            # fall back to plotting the raw point(s) without a density curve.
             ax.scatter(vals, np.full_like(vals, dot_y),
                        color=col_kde, alpha=0.6, s=20, zorder=5)
             handles.append(

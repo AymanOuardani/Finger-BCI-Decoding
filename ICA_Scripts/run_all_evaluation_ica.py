@@ -30,6 +30,12 @@ SUBJECTS    = [7,8,9,11,12,13]
 
 
 def run_subject(subj_id):
+    """Run eval_ica_model.py as a subprocess for one subject, streaming
+    selected output lines live and parsing the accuracy values from the
+    'RESULT:' line it prints.
+
+    Returns (cmd_str, display_lines, returncode, online_val, online_perf).
+    """
     cmd = [
         'python', 'eval_ica_model.py',
         str(subj_id), str(SESSION_NUM), str(NCLASS), TASK, MODELTYPE
@@ -85,6 +91,8 @@ def run_subject(subj_id):
 
 
 def main():
+    """Loop run_subject() over all configured SUBJECTS and write the resulting
+    accuracies into the ICA table of Tracking.ods."""
     per_sheet = f"{TASK}_Sess{SESSION_NUM:02}_{NCLASS}Class"
     base_col  = ICA_MODEL_START[MODELTYPE]
     col_val   = base_col + 1   # Online Val_Accuracy

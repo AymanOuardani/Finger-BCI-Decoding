@@ -13,6 +13,10 @@ from matplotlib.lines import Line2D
 
 
 def kl_divergence(p, q):
+    """Kullback-Leibler divergence KL(p || q) between two discretized distributions p, q
+    (assumed to already sum to 1 over the same support)."""
+    # Clip away zeros to avoid log(0) / division-by-zero in regions where one
+    # distribution has (near) no density.
     p = np.clip(p, 1e-10, None)
     q = np.clip(q, 1e-10, None)
     return np.sum(p * np.log(p / q))
@@ -23,6 +27,8 @@ def plot_distribution(values1, values2,
                       values3=None, label3="ICA Results",
                       title="Accuracy Distribution", xlabel="Accuracy (%)",
                       save_path=None):
+    """Plot overlaid KDE distributions (with mean/median lines and individual score
+    dots) for two or three accuracy series, annotated with pairwise KL divergences."""
 
     values1 = np.array(values1)
     values2 = np.array(values2)
@@ -40,6 +46,8 @@ def plot_distribution(values1, values2,
     x = np.linspace(20, 90, 1000)
 
     kdes = [gaussian_kde(v) for v in all_values]
+    # Renormalize each KDE curve to sum to 1 over the sampled grid so it can be
+    # treated as a discrete probability distribution for the KL-divergence calc.
     kde_norm = [k(x) / k(x).sum() for k in kdes]
 
     kl_pq = kl_divergence(kde_norm[0], kde_norm[1])
@@ -200,6 +208,7 @@ if __name__ == "__main__":
 
     # -- Drop subjects with missing data (NaN in any active series) -
     def _ok(o, a, i):
+        """True if none of the (our, article, ICA) values for a subject is NaN (ICA optional)."""
         return not (math.isnan(o) or math.isnan(a) or
                     (i is not None and math.isnan(i)))
 

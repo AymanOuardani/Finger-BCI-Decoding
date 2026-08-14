@@ -65,6 +65,7 @@ BAND_ORDER = ["Fullband", "Delta", "Theta", "Alpha", "Beta", "Gamma"]
 
 
 def _save(fig, save_path):
+    """Create the output directory if needed, save the figure, close it, and log the path."""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     fig.savefig(save_path, bbox_inches="tight")
     plt.close(fig)
@@ -73,10 +74,11 @@ def _save(fig, save_path):
 
 def strip_by_class(energy, classes, fingers, title, ylabel, save_path, ylim=None):
     """Per-finger strip plot of the trial energies, with the median marked."""
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(0)  # fixed seed so jitter is reproducible across runs
     fig, ax = plt.subplots(figsize=(7, 4.6))
     for fi, finger in enumerate(fingers):
         vals = energy[classes == finger]
+        # jitter x-position around the class slot so overlapping trial points stay visible
         ax.scatter(rng.normal(fi, 0.07, len(vals)), vals,
                    c=es.CLASS_COLORS.get(finger, "gray"), s=22, alpha=0.75,
                    edgecolors="white", linewidths=0.3, zorder=3)
@@ -131,6 +133,8 @@ def energy_sorted(energy, classes, fingers, finger, title, save_path):
 
     inside = classes == finger
     auc = es.auc_matrix(energy.reshape(-1, 1), classes, [finger])[0, 0]
+    # among the n_in highest-energy trials (the tail of the ranking), how many
+    # actually belong to this finger — a direct, interpretable check against the AUC
     top_hits = int((ranked_classes[-n_in:] == finger).sum()) if n_in else 0
 
     fig, ax = plt.subplots(figsize=(9.5, 4.8))
@@ -164,6 +168,7 @@ def energy_sorted(energy, classes, fingers, finger, title, save_path):
 
 
 def main():
+    """Parse CLI args, load per-trial source energy, and dispatch to the requested plot mode."""
     if len(sys.argv) < 6:
         print(__doc__)
         sys.exit(1)
@@ -223,6 +228,9 @@ def main():
         del E_band
         gc.collect()
 
+        # compute a common log-scale y-limit from both energy arrays (dropping
+        # zeros, which would break the log scale) so fullband and band plots
+        # are visually comparable
         stacked = np.concatenate([energy_full[energy_full > 0],
                                   energy_band[energy_band > 0]])
         ylim = (stacked.min() * 0.7, stacked.max() * 1.4)

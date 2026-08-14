@@ -39,6 +39,11 @@ SUBJECTS    = list(range(13, 17))
 
 
 def clean_subject(subj_id):
+    """Run ICA cleaning for one subject: load raw .mat files, fit/load ICA,
+    auto-detect EOG/EMG components to exclude, and save cleaned .mat files.
+
+    Returns (n_excluded, eog_idx, emg_idx).
+    """
     if IS_OFFLINE:
         folder = get_offline_folder(subj_id, TASK)
     else:
@@ -83,6 +88,7 @@ def clean_subject(subj_id):
 
 
 def main():
+    """Loop clean_subject() over all configured SUBJECTS and print a summary."""
     mode = ("Offline" if IS_OFFLINE
             else f"Sess{SESSION_NUM:02} {NCLASS}-class {MODELTYPE}")
     print(f"Batch ICA Cleaning — {TASK} | {mode}")

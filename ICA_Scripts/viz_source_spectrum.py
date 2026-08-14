@@ -83,6 +83,12 @@ def _load_source(subj, sess, nclass, model, src, task):
 
 
 def spectrum_per_task(signal, trials, classes, sfreq, fingers, head, save_path):
+    """Compute and plot the mean Welch PSD and band power per finger task.
+
+    Skips trials shorter than NPERSEG (too short for a reliable Welch estimate)
+    and any class not in `fingers`. Also prints band power and the low-frequency
+    (<8 Hz) power fraction per finger, a quick indicator of drift/muscle content.
+    """
     psd_by_finger = {f: [] for f in fingers}
     freqs = None
     for cls, start, end in trials:
@@ -99,11 +105,12 @@ def spectrum_per_task(signal, trials, classes, sfreq, fingers, head, save_path):
         return
 
     mask = (freqs >= FMIN) & (freqs <= FMAX)
-    df = freqs[1] - freqs[0]
+    df = freqs[1] - freqs[0]  # frequency bin width, used to integrate PSD into band power
     mean_psd = {f: np.mean(np.array(psd_by_finger[f]), axis=0) for f in usable}
 
     band_power = {}
     for f in usable:
+        # integrate PSD over each band's frequency range (rectangle rule: sum * bin width)
         band_power[f] = [mean_psd[f][(freqs >= lo) & (freqs < hi)].sum() * df
                          for _lbl, lo, hi in PLOT_BANDS]
 
@@ -154,6 +161,7 @@ def spectrum_per_task(signal, trials, classes, sfreq, fingers, head, save_path):
 
 
 def spectrum_full(signal, sfreq, head, save_path):
+    """Plot the Welch PSD of the entire continuous source signal, with frequency bands shaded."""
     freqs, power = welch(signal, fs=sfreq, nperseg=NPERSEG, noverlap=NPERSEG // 2)
     mask = (freqs >= FMIN) & (freqs <= FMAX)
 
@@ -177,6 +185,7 @@ def spectrum_full(signal, sfreq, head, save_path):
 
 
 def main():
+    """Parse CLI args, load the ICA source signal, and dispatch to the requested spectrum plot."""
     if len(sys.argv) < 6:
         print(__doc__)
         sys.exit(1)

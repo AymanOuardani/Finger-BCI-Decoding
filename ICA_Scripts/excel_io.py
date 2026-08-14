@@ -20,8 +20,8 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 
-HEADER_FILL = PatternFill("solid", fgColor="1F3864")
-HEADER_FONT = Font(bold=True, color="FFFFFF")
+HEADER_FILL = PatternFill("solid", fgColor="1F3864")   # dark navy header background
+HEADER_FONT = Font(bold=True, color="FFFFFF")           # white bold header text
 
 
 def write_sheet(path, sheet_name, header, rows, freeze_header=True,
@@ -37,15 +37,16 @@ def write_sheet(path, sheet_name, header, rows, freeze_header=True,
                    from the content
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    sheet_name = str(sheet_name)[:31]
+    sheet_name = str(sheet_name)[:31]      # Excel hard limit on sheet-name length
 
     if os.path.exists(path):
         wb = load_workbook(path)
     else:
         wb = Workbook()
-        wb.remove(wb.active)
+        wb.remove(wb.active)   # drop the default empty "Sheet" so it never lingers
 
     if sheet_name in wb.sheetnames:
+        # Replace only this sheet; every other sheet in the workbook is left as-is.
         wb.remove(wb[sheet_name])
     ws = wb.create_sheet(sheet_name)
 
@@ -68,6 +69,8 @@ def write_sheet(path, sheet_name, header, rows, freeze_header=True,
         if name in column_width:
             width = column_width[name]
         else:
+            # Auto-size from the longest cell/header text in that column,
+            # padded and clamped to a sane [9, 42] character range.
             longest = max([len(str(name))] +
                           [len(str(r[col_idx - 1])) for r in rows
                            if col_idx <= len(r)] or [0])

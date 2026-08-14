@@ -106,6 +106,8 @@ def _preprocess_raw(raw):
 
 
 def load_and_preprocess(subj, sess, ncl, task, model):
+    """Load raw (non-ICA) online .mat files for one subject/session and run
+    the paper-exact preprocessing pipeline (CAR -> downsample -> bandpass)."""
     folder    = get_folder(subj, task, sess, ncl, model)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -117,6 +119,8 @@ def load_and_preprocess(subj, sess, ncl, task, model):
 
 
 def load_and_preprocess_ica(subj, sess, ncl, task, model):
+    """Load the ICA-cleaned online .mat files (produced by clean_ICA.py) for
+    one subject/session and run the paper-exact preprocessing pipeline."""
     folder_ica = to_ica_path(get_folder(subj, task, sess, ncl, model))
     mat_files  = sorted(glob.glob(os.path.join(folder_ica, "*.mat")))
     if not mat_files:
@@ -128,6 +132,8 @@ def load_and_preprocess_ica(subj, sess, ncl, task, model):
 
 
 def load_and_preprocess_offline(subj_id, task):
+    """Load raw (non-ICA) offline .mat files for one subject/task and run
+    the paper-exact preprocessing pipeline."""
     folder    = get_offline_folder(subj_id, task)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     if not mat_files:
@@ -138,6 +144,8 @@ def load_and_preprocess_offline(subj_id, task):
 
 
 def load_and_preprocess_ica_offline(subj_id, task):
+    """Load the ICA-cleaned offline .mat files for one subject/task and run
+    the paper-exact preprocessing pipeline."""
     folder_ica = to_ica_path(get_offline_folder(subj_id, task))
     mat_files  = sorted(glob.glob(os.path.join(folder_ica, "*.mat")))
     if not mat_files:
@@ -149,6 +157,9 @@ def load_and_preprocess_ica_offline(subj_id, task):
 
 
 def build_epochs_no_reject(raw, finger_pairs, tmax=TMAX_ONLINE):
+    """Build per-finger epochs from continuous data WITHOUT the 20 uV
+    trial-rejection step (used only when the caller just needs channel/info
+    metadata and doesn't care whether trials would otherwise be dropped)."""
     event_id = {name: eid for name, eid in finger_pairs}
     events, _ = mne.events_from_annotations(raw, event_id=event_id, verbose=False)
     if len(events) == 0:
@@ -163,6 +174,8 @@ def build_epochs_no_reject(raw, finger_pairs, tmax=TMAX_ONLINE):
 
 
 def build_epochs(raw, finger_pairs, tmax=TMAX_ONLINE):
+    """Build per-finger epochs from continuous data and apply the paper's
+    20 uV trial-rejection rule (see inline comment below for the exact rule)."""
     event_id = {name: eid for name, eid in finger_pairs}
 
     # Events extracted from annotations at the resampled sfreq
@@ -515,6 +528,9 @@ def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
 
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between online / offline
+    / offline-group modes and drives `_run` (or a per-subject loop in GROUP
+    mode) to produce the Before-vs-After-ICA ERD topomap figure(s)."""
     group_mode = 'GROUP' in [a.upper() for a in sys.argv]
     if group_mode:
         sys.argv = [a for a in sys.argv if a.upper() != 'GROUP']

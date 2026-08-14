@@ -24,6 +24,11 @@ SUBJECTS    = [5]
 
 
 def run_subject(subj_id):
+    """Run train_model.py as a subprocess for one subject, streaming
+    training-progress lines live.
+
+    Returns (cmd_str, display_lines, returncode).
+    """
     cmd = [
         'python', 'train_model.py',
         str(subj_id), str(SESSION_NUM), str(NCLASS), TASK, MODELTYPE
@@ -70,6 +75,7 @@ def run_subject(subj_id):
 
 
 def main():
+    """Loop run_subject() over all configured SUBJECTS and print a summary."""
     print(f"ICA Training : {TASK}  {NCLASS}-class  {MODELTYPE}  Session {SESSION_NUM}")
     print(f"Subjects     : {SUBJECTS}")
     print()

@@ -92,6 +92,7 @@ def watch(path, interval):
 
 
 def main():
+    """Parse CLI args and either clean the ODS file once or watch it continuously."""
     ap = argparse.ArgumentParser(description="Fix duplicated ODF formula prefixes in an .ods file.")
     ap.add_argument("ods", nargs="?", default=TRACKING_ODS,
                     help="path to the .ods file (default: config.TRACKING_ODS)")

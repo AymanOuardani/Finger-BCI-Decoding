@@ -48,14 +48,17 @@ SUBJECTS    = list(range(3, 22))
 
 
 def get_row_idx(subj_id):
+    """ODS row index for this subject in the per-condition sheet (see layout above)."""
     return subj_id + ROW_SUBJECT_OFFSET
 
 
 def get_per_sheet_name(task, session_num, nclass):
+    """ODS sheet name for one (task, session, nclass) condition."""
     return f"{task}_Sess{session_num:02}_{nclass}Class"
 
 
 def get_cm_save_path(subj_id):
+    """Output path for this subject's confusion-matrix PNG, creating the subject folder if needed."""
     subj_folder = os.path.join(RESULTS_ROOT, f"Sujet {subj_id}")
     os.makedirs(subj_folder, exist_ok=True)
     filename = (
@@ -66,6 +69,7 @@ def get_cm_save_path(subj_id):
 
 
 def save_confusion_matrix(subj_id, label, trial_preds, accuracy_online):
+    """Build and save the confusion-matrix PNG for one subject's evaluation run."""
     cm   = confusion_matrix(label, trial_preds, labels=list(range(1, NCLASS + 1)))
     disp = ConfusionMatrixDisplay(
         confusion_matrix=cm,
@@ -96,6 +100,7 @@ PARAMS = {
 
 
 def main():
+    """Evaluate every subject in SUBJECTS for the configured (TASK, NCLASS, MODELTYPE, SESSION_NUM) combo, writing accuracies to the ODS and saving a confusion matrix per subject."""
     per_sheet_name  = get_per_sheet_name(TASK, SESSION_NUM, NCLASS)
     base_col        = SHEET_MODEL_START[MODELTYPE]
     col_online_val  = base_col + 1

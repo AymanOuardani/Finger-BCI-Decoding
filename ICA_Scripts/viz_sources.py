@@ -399,6 +399,7 @@ class ICAInspector:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sources_online(subj, sess, ncl, task, model):
+    """Load the cached per-session ICA and open the interactive inspector for an online recording."""
     print("=" * 60)
     print(f"  ICA Sources: S{subj:02} Sess{sess:02} | {task} {ncl}-class | {model}")
     print("=" * 60)
@@ -416,6 +417,7 @@ def sources_online(subj, sess, ncl, task, model):
 
 
 def sources_offline(subj, task):
+    """Load the cached ICA and open the interactive inspector for an offline recording."""
     print("=" * 60)
     print(f"  ICA Sources: S{subj:02} | {task} (Offline)")
     print("=" * 60)
@@ -434,6 +436,7 @@ def sources_offline(subj, task):
 
 
 def main():
+    """Parse CLI args and dispatch to the online or offline ICA inspector."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.remove(sys.argv[-1])

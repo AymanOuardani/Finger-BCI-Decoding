@@ -46,6 +46,8 @@ from config import CORR_MAPS_DIR, CORRUPTED_DATA
 
 def plot_map(matrix, fingers, subj, task, sess, nclass, model,
              metric, band, artifacts, save_path):
+    """Render and save one tasks x ICA-sources correlation heatmap (fingers on
+    the y-axis, sources on the x-axis, artefact source labels drawn in red)."""
     label, _fn, (vmin, vmax) = es.METRICS[metric]
     cmap = "RdBu_r"
     artifacts = set(artifacts or [])
@@ -77,6 +79,8 @@ def plot_map(matrix, fingers, subj, task, sess, nclass, model,
 
 
 def main():
+    """CLI entry point: parse argv, then generate one correlation map per
+    (session, nClass, model) recording available for the subject."""
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
@@ -98,6 +102,8 @@ def main():
     print(f"S{subj:02d} {task}: {len(groups)} (session, nClass) group(s)")
     print(f"metric={metric}  band={band}  ->  {out_dir}")
 
+    # Artefact indices come from the offline ICA and are reused for every
+    # session/model of the subject, so a column means the same source throughout.
     artifacts = es.auto_artifacts(subj, task)
     print(f"Offline artefact sources ({len(artifacts)}): {sorted(artifacts)}")
 

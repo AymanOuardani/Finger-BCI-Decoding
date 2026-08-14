@@ -23,6 +23,7 @@ SUBJECTS    = [3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21]  # 1 to 21 inc
 # ─────────────────────────────────────────────────────────────────
 
 def run_subject(subj_id):
+    """Run main_model_training.py for one subject as a subprocess, streaming useful log lines live and returning a filtered summary."""
     cmd = [
         'python', 'main_model_training.py',
         str(subj_id), str(SESSION_NUM), str(NCLASS), TASK, MODELTYPE
@@ -72,6 +73,7 @@ def run_subject(subj_id):
     return cmd_str, display_lines, proc.returncode
 
 def main():
+    """Train every subject in SUBJECTS for the configured (SESSION_NUM, NCLASS, TASK, MODELTYPE) combo, printing a per-subject summary."""
     for subj_id in SUBJECTS:
         cmd_str, last_10, returncode = run_subject(subj_id)
 

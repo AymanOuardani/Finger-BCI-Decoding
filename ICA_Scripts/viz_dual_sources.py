@@ -549,6 +549,8 @@ class DualSourceViewer:
     # ── draw ──────────────────────────────────────────────────────────────────
 
     def _draw(self):
+        """Redraw both rows for the current time window / zoom / vertical
+        scale, including trial spans, onset markers and energy labels."""
         t0 = self.t_start
         t1 = t0 + self.win_sec
 
@@ -629,6 +631,7 @@ class DualSourceViewer:
     # ── navigation ────────────────────────────────────────────────────────────
 
     def _on_key(self, ev):
+        """Keyboard navigation: scroll/zoom the time window and vertical scale."""
         k = ev.key
         if k == "right":
             self.t_start = min(
@@ -654,6 +657,7 @@ class DualSourceViewer:
         self._draw()
 
     def _on_scroll(self, ev):
+        """Mouse-wheel zoom of the horizontal time window."""
         factor = 1.0 / 1.3 if ev.step > 0 else 1.3
         self.win_sec = float(np.clip(self.win_sec * factor, 2.0, self.t_max))
         self._draw()
@@ -681,6 +685,9 @@ class DualSourceViewer:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
+    """CLI entry point: load the two hard-coded SOURCES, open the detail/
+    correlation/energy-vector windows, then launch the interactive dual
+    viewer."""
     print("=" * 60)
     print("  ICA Dual Source Viewer")
     print("=" * 60)

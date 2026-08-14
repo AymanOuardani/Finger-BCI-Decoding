@@ -45,6 +45,7 @@ TASK_COLORS = {
 
 
 def main():
+    """Parse CLI args, build the squared-source / task-membership overlay, and open the MNE viewer."""
     subj   = int(sys.argv[1]) if len(sys.argv) > 1 else 9
     sess   = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     nclass = int(sys.argv[3]) if len(sys.argv) > 3 else 3

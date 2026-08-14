@@ -90,8 +90,12 @@ def plot_source_inspector(ica, raw, corr_matrix, tasks_list):
     sfreq   = float(raw.info["sfreq"])
     n_tasks = len(tasks_list)
 
+    # Hilbert amplitude envelope per source, used to visualise the slow
+    # power fluctuation underneath the raw oscillatory trace.
     envelopes = np.array([compute_envelope(src, sfreq) for src in sources_data])
 
+    # Peak-to-peak amplitude per source, used to normalise each trace to a
+    # comparable visual scale (guarding against near-flat/artifact sources).
     comp_ptp = np.array([
         np.ptp(src) if np.ptp(src) > 1e-15 else 1.0
         for src in sources_data
@@ -105,6 +109,8 @@ def plot_source_inspector(ica, raw, corr_matrix, tasks_list):
     task_vectors_z  = {}
     task_z_peaks    = {}
     for _name, _vec in task_vectors.items():
+        # z-score each task's 0/1 membership vector so its overlay is on a
+        # comparable scale to the (also normalised) source signal.
         _vz = zscore(_vec) if np.std(_vec) > 0 else _vec
         task_vectors_z[_name] = _vz
         _peak = float(np.max(np.abs(_vz))) if np.size(_vz) else 1.0
@@ -547,6 +553,11 @@ def _signed_energy_heatmap(mat, tasks_list, subj_id, task, mode, band_label,
 
 def run_correlation_analysis(subj_id, task, session=1, nclass=2,
                               model_type="Orig", is_offline=False):
+    """Top-level pipeline: load raw data, fit/load ICA, detect artifact
+    components, compute signed energy<->task correlations per frequency band,
+    save/show the heatmaps, then open the two interactive viewers fed with
+    the Fullband correlation matrix.
+    """
     if is_offline:
         folder = get_offline_folder(subj_id, task)
     else:
@@ -640,6 +651,8 @@ def run_correlation_analysis(subj_id, task, session=1, nclass=2,
 
 
 def main():
+    """CLI entry point: dispatch to the offline or online correlation
+    analysis based on the trailing 'OFF' argument."""
     if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
         sys.argv.pop()
         subj_id, task = get_offline_args(description="ICA Correlation - Offline")

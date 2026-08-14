@@ -41,11 +41,17 @@ ALL_SUBJECTS = GROUP_ERD_SUBJECTS
 def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
                title_prefix, save_name, task,
                tmax=TMAX_ONLINE, task_win=TASK_WIN_ONLINE):
+    """Loop over ALL_SUBJECTS, compute per-subject Before/After-ICA ERD maps,
+    average them across the group, optionally log per-finger ICA ERD means
+    to the tracking ODS spreadsheet, and save the group comparison figure."""
     band = next((k for k in BANDS_CONFIG if k.lower() == band_raw.lower()), band_raw)
     if band not in BANDS_CONFIG:
         print(f"[ERROR] band must be one of: {list(BANDS_CONFIG.keys())}")
         sys.exit(1)
 
+    # Maps (task, band) -> {ods_row_index: finger_name}, i.e. the fixed row
+    # layout of the tracking spreadsheet ("ERD Group Plots" sheet) where each
+    # subject's per-finger After-ICA ERD mean gets written (one column per subject).
     ODS_SECTIONS = {
         ("ME", "Alpha"):    {1: "Thumb", 2: "Index", 3: "Middle", 4: "Pinky"},
         ("ME", "Beta"):     {8: "Thumb", 9: "Index", 10: "Middle", 11: "Pinky"},
@@ -171,6 +177,8 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
 
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between online and
+    offline group modes and drives `_run_group`."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()  # strip "OFF"

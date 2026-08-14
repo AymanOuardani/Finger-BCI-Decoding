@@ -24,6 +24,8 @@ from Functions import (
 
 
 def compare_online(subj_id, session, nclass, task, model_type):
+    """Load the online raw/cleaned pair for the given recording and launch
+    the side-by-side comparison viewer."""
     print("=" * 60)
     print(f"  Online Viewer: S{subj_id:02} | {task} | Session {session}")
     print("=" * 60)
@@ -32,6 +34,8 @@ def compare_online(subj_id, session, nclass, task, model_type):
 
 
 def compare_offline(subj_id, task):
+    """Load the offline raw/cleaned pair for the given subject/task and
+    launch the side-by-side comparison viewer."""
     print("=" * 60)
     print(f"  Offline Viewer: S{subj_id:02} | {task}")
     print("=" * 60)
@@ -40,6 +44,8 @@ def compare_offline(subj_id, task):
 
 
 def main():
+    """CLI entry point: dispatch to the offline or online comparison based on
+    the trailing 'OFF' argument, then launch the viewer."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()

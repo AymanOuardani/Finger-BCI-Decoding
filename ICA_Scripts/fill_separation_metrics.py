@@ -82,6 +82,8 @@ def subject_rows(subj, band, essai, task, metric="pearson"):
 
             for fi, finger in enumerate(fingers):
                 for tag, (_label, artifacts) in splits.items():
+                    # Artefact-vs-Non-Artefact separation on |r| for this
+                    # finger, under this artefact definition (AUTO or MANUEL).
                     st = es.separation(matrix[fi], artifacts, n_comp)
                     rows.append([
                         f"S{subj:02d}", task, sess, nclass, model, band, finger, tag,
@@ -101,6 +103,8 @@ def subject_rows(subj, band, essai, task, metric="pearson"):
 
 
 def main():
+    """CLI entry point: parse argv (single subject or "all") and write one
+    Excel sheet of separation metrics per (subject, band) to SEPARATION_XLSX."""
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)

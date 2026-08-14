@@ -35,6 +35,8 @@ from Functions import build_raw_from_mat_files, get_folder
 
 
 def main():
+    """CLI entry point: load the recording, band-filter the selected ICA
+    source, overlay task annotations, and open the interactive MNE viewer."""
     if len(sys.argv) < 7:
         print("Usage: python viz_band_source.py <subj> <sess> <nclass> <task> "
               "<model> <src> [lo] [hi]   (default band: delta 1-4 Hz)")
@@ -59,9 +61,9 @@ def main():
     raw.notch_filter(np.arange(60, 501, 60), verbose=False)
 
     ica = ch._load_offline_ica(subj, task)
-    sources = ica.get_sources(raw)
+    sources = ica.get_sources(raw)      # unmix raw into one channel per ICA component
     ch_name = sources.ch_names[src]
-    one = sources.copy().pick([ch_name])
+    one = sources.copy().pick([ch_name])   # isolate the single source of interest
 
     print(f"Filtering ICA{src:03d} to {lo:g}-{hi:g} Hz ...")
     one.filter(lo, hi, verbose=False)

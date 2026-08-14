@@ -350,10 +350,12 @@ def DeepConvNet(nb_classes, Chans = 64, Samples = 256,
 
 # need these for ShallowConvNet
 def square(x):
+    """Elementwise square activation (approximates a power/variance estimate over the pooled window)."""
     return K.square(x)
 
 def log(x):
-    return K.log(K.clip(x, min_value = 1e-7, max_value = 10000))   
+    """Elementwise natural log activation; input is clipped to avoid log(0) / overflow before taking the log."""
+    return K.log(K.clip(x, min_value = 1e-7, max_value = 10000))
 
 
 def ShallowConvNet(nb_classes, Chans = 64, Samples = 128, dropoutRate = 0.5):

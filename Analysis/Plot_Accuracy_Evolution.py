@@ -47,6 +47,7 @@ BAND_STYLE = {
 
 # ── Read one value from ODS ───────────────────────────────────────────────────
 def read_value(df, row_idx, col_idx):
+    """Read a single numeric cell from `df`, returning None if it's missing, NaN, or unreadable."""
     try:
         val = df.iloc[row_idx, col_idx]
         fval = float(val)
@@ -88,6 +89,8 @@ def load_data(subj_id, task, nclass):
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 def plot_evolution(subj_id, task, nclass, data, save_path=None):
+    """Plot per-band accuracy lines across the 4 conditions (session x base/fine-tuned),
+    with value annotations, a chance-level reference line, and a session-boundary marker."""
     x_labels = [c[0] for c in CONDITIONS]
     x        = np.arange(len(CONDITIONS))
 
@@ -192,6 +195,7 @@ def parse_args():
 
 
 def main():
+    """CLI entry point: parses arguments, loads accuracy data, prints a summary table, and plots it."""
     args     = parse_args()
     subj_id  = args.subj_id
     task     = args.task

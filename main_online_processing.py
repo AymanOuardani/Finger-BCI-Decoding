@@ -24,11 +24,17 @@ from EEGModels_tf import EEGNet
 #################################################################
 #################################################################
 
-class BciSignalProcessing(BciGenericSignalProcessing):	
-	
+class BciSignalProcessing(BciGenericSignalProcessing):
+	# BCI2000/BCPy2000 signal-processing filter: downsamples the incoming EEG,
+	# buffers it into a fixed-length window, bandpass-filters and z-scores it,
+	# then feeds it through a pretrained EEGNet model to produce per-finger
+	# class probabilities for the real-time feedback loop.
+
 	#############################################################
-	
+
 	def Construct(self):
+		"""Declare the BCI2000 parameters (downsample rate, window length,
+		trained-model path) and states (FeedbackProc flag) used by this filter."""
 		parameters = [
 			"PythonSig:Processing	int	DownsampleRate=	100	100	0	1024	// downsampling rate",
 			"PythonSig:Processing	int	WindowLength=	1000	1000	0	5000	// window length in ms",
@@ -44,13 +50,18 @@ class BciSignalProcessing(BciGenericSignalProcessing):
 	#############################################################
 	
 	def Preflight(self, sigprops):
-		self.out_signal_dim = (4,1) # send the prob 
-		
+		"""BCI2000 dry-run hook: declares the output signal shape (4 class
+		probabilities x 1 sample) before real acquisition starts."""
+		self.out_signal_dim = (4,1) # send the prob
+
 		pass
 		
 	#############################################################
 	
 	def Initialize(self, indim, outdim):
+		"""Called once acquisition parameters are known: reads the configured
+		sampling/window parameters and builds + loads the EEGNet model that
+		will classify each incoming window."""
 
 		self.FeefbackOn = 0
 		self.newsig = []
@@ -70,28 +81,36 @@ class BciSignalProcessing(BciGenericSignalProcessing):
 	#############################################################
 	
 	def Process(self, sig):
-		
+		"""Called on every incoming block of raw EEG samples: downsamples and
+		buffers the signal into a sliding window, and once the window is full,
+		bandpass-filters, z-scores and classifies it with EEGNet, returning a
+		4-element (one per finger) probability vector each call."""
+
 		kernels = 1
 
 		chans, samples = np.shape(sig)
-		sig = sig-sig.mean(axis=0)
+		sig = sig-sig.mean(axis=0)  # remove per-channel DC offset before resampling
 
 		newSamples = int(samples/self.samplingRate*self.newsamplingRate)
-		
+
 		if not len(self.newsig):
 			self.newsig = resample(sig, newSamples, t=None, axis=1, window=None, domain='time')
 		else:
+			# Append the newly downsampled block to the running buffer (sliding window)
 			self.newsig = np.concatenate((self.newsig, resample(sig, newSamples, t=None, axis=1, window=None, domain='time')),axis=1)
-		
+
 
 		if np.size(self.newsig,1) >= self.DesiredLen:
 			self.FeefbackOn = 1
+			# Keep only the most recent DesiredLen samples (fixed-size sliding window)
 			self.newsig = self.newsig[:,-self.DesiredLen:]
 
 		# feed into EEGNet
 		if self.FeefbackOn:
 
 			# bandpass filtering
+			# Zero-pad before filtering to reduce edge/transient artifacts from
+			# the Butterworth filter, then trim the padding back off afterward.
 			padding_length = 100  # Number of zeros to pad
 			padded_sig = np.pad(self.newsig, ((0,0),(padding_length,padding_length)), 'constant', constant_values=0)
 
@@ -99,11 +118,13 @@ class BciSignalProcessing(BciGenericSignalProcessing):
 			padded_sig = scipy.signal.lfilter(b, a, padded_sig, axis=-1)
 			insig = padded_sig[:,padding_length:-padding_length]
 
-			insig = scipy.stats.zscore(insig, axis=1, nan_policy='omit')
-			insig = insig.reshape(1,self.chans,self.DesiredLen,kernels)
+			insig = scipy.stats.zscore(insig, axis=1, nan_policy='omit')  # per-channel normalization expected by EEGNet
+			insig = insig.reshape(1,self.chans,self.DesiredLen,kernels)  # EEGNet input shape: (batch, chans, samples, kernels)
 			output			 = self.model.predict(insig)
 			output			 = output.flatten()
 			self.probs       = np.zeros((4,))
+			# Map model output indices (0..nclasses-1) back to the fixed 4-finger
+			# probability slots using the configured ClassList (1-based finger IDs)
 			for i, j in enumerate(self.classlist):
 				self.probs[j-1]		 = output[i]
 		else:

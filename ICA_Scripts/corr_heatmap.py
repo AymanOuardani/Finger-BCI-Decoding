@@ -309,6 +309,13 @@ def _load_offline_ica(subj_id, task):
 def run_heatmap(subj_id, task, session=1, nclass=2,
                 model_type="Orig", is_offline=False, save_path=None,
                 interactive=False, reuse_offline_ica=True):
+    """Load one recording, run/reuse its ICA, and compute+render the task<->
+    component correlation heatmap for every frequency band in BANDS.
+
+    In interactive mode (or when save_path is None) the figures stay open and
+    left-clicking a heatmap cell opens that ICA source's properties window and
+    a scrollable source browser; otherwise the PNGs are just saved to disk.
+    """
     if is_offline:
         folder = get_offline_folder(subj_id, task)
     else:
@@ -341,6 +348,8 @@ def run_heatmap(subj_id, task, session=1, nclass=2,
     print("Computing task <-> ICA correlations ...")
     src_raw      = ica.get_sources(raw)              # Raw with the ICA source channels
     sfreq        = float(raw.info["sfreq"])
+    # One binary/continuous vector per task, sampled at sfreq, marking when
+    # that task was active during the recording.
     task_vectors = build_task_vectors(raw)
 
     if not task_vectors:
@@ -439,6 +448,8 @@ def run_heatmap(subj_id, task, session=1, nclass=2,
 
 
 def main():
+    """CLI entry point: dispatch to offline or online argument parsing based on
+    a trailing "OFF" token, then run the heatmap for every requested subject."""
     offline = len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF"
 
     if offline:

@@ -27,6 +27,10 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
 def main():
+    """CLI entry point: locates the ICA-cleaned evaluation folders and the
+    corresponding trained model (from train_model.py), runs evaluation,
+    builds/saves a confusion matrix figure, and prints the resulting
+    online/offline accuracy metrics."""
     subj_id, session_num, nclass, task, modeltype = get_standard_args(
         description="ICA Evaluation"
     )

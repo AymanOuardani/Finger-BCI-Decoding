@@ -25,6 +25,10 @@ from config import (
 import numpy as np
 
 def main():
+    """CLI entry point: locates the ICA-cleaned training folders for one
+    subject/session/task/model, loads and filters the data, trains EEGNet
+    via `train_models`, and logs the resulting validation accuracy to the
+    tracking ODS spreadsheet."""
     subj_id, session_num, nclass, task, modeltype = get_standard_args(
         description="ICA Training"
     )

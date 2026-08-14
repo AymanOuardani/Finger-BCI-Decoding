@@ -94,13 +94,19 @@ def _energy_task_corr(E, trial_classes, tasks):
     membership is the complement of the other, so the signs flip); in 3-class
     the one-vs-rest contrasts differ."""
     n_trials, n_comp = E.shape
+    # Z-score each source's energy across trials (raw energies, magnitude-aware
+    # — unlike a rank-based metric this keeps how much energy differs, not
+    # just its rank).
     Ez = E - E.mean(axis=0, keepdims=True)        # raw energies (magnitude-aware)
     es = Ez.std(axis=0, keepdims=True)
-    es[es == 0] = 1.0
+    es[es == 0] = 1.0                              # avoid divide-by-zero on constant sources
     Ez = Ez / es
     cls_arr = np.asarray(trial_classes)
     out = np.zeros((len(tasks), n_comp))
     for ti, T in enumerate(tasks):
+        # One-vs-rest task membership vector, also standardised, so the dot
+        # product with Ez / n_trials is exactly the Pearson correlation
+        # coefficient between energy and task membership.
         m = (cls_arr == T).astype(float)
         m -= m.mean()
         ms = m.std()
@@ -168,6 +174,16 @@ def _chronological_trials(raw):
 
 
 def _rows_for_recording(subj_id, task, session, nclass, model):
+    """Load one recording, compute per-trial per-source energy in every band,
+    and build the flat (trial x source) rows for the energy sheet.
+
+    Returns a dict with:
+      rows           list of HEADER-shaped row values, one per (trial, source)
+      E_per_band     list (one per BANDS entry) of (n_trials, n_comp) energy arrays
+      trial_classes  finger label of each trial, chronological order
+      artifacts      set of auto-detected EOG/EMG artefact source indices
+      n_comp         number of ICA sources
+    """
     folder = get_folder(subj_id, task, session, nclass, model)
     mat_files = sorted(glob.glob(os.path.join(folder, "*.mat")))
     raw, _, _ = build_raw_from_mat_files(mat_files)
@@ -209,6 +225,8 @@ def _rows_for_recording(subj_id, task, session, nclass, model):
 
     rows = []
     for t_idx, (cls, s, e) in enumerate(trials, start=1):
+        # Energy (sum of squared samples) of every source over this trial's
+        # sample window [s:e), computed separately for each band.
         for bi, bd in enumerate(band_data):
             E_per_band[bi][t_idx - 1] = np.sum(bd[:, s:e] ** 2, axis=1)
         for c in range(n_comp):
@@ -257,6 +275,8 @@ _CONTENT_TAIL = '</office:spreadsheet></office:body></office:document-content>'
 
 
 def _cell_xml(v):
+    """Serialise one Python value (str/int/float) as an ODF table:table-cell
+    element, choosing the string vs. float value-type accordingly."""
     if isinstance(v, str):
         return (f'<table:table-cell office:value-type="string">'
                 f'<text:p>{escape(v)}</text:p></table:table-cell>')
@@ -328,6 +348,11 @@ def _detect_groups(subj_id, task):
 
 
 def fill_subject(subj_id, task="MI"):
+    """Build the full per-subject energy workbook: one sheet per (session,
+    nClass) with per-trial per-source energies, a long-format "Corr" sheet of
+    energy<->task correlations, an "Enrgy_Corr_Evolution" sheet (3-class), and
+    the accompanying energy-correlation heatmap PNGs. Overwrites the ODS file
+    if it already exists (idempotent full rebuild)."""
     out_path = os.path.join(EXCEL_DIR, f"Sujet_{subj_id:02d}.ods")
     print(f"\n=== Energy workbook for S{subj_id:02} -> {out_path} ===")
 
@@ -465,6 +490,7 @@ def fill_subject(subj_id, task="MI"):
 
 
 def main():
+    """CLI entry point: parse argv and build the requested subject's workbook."""
     if len(sys.argv) < 2:
         print("Usage: python fill_energy_table.py <subj> [<task>]")
         sys.exit(1)

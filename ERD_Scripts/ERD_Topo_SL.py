@@ -121,6 +121,8 @@ def plot_erd_comparison_sl(erd_raw, erd_ica, band_label, finger_names, info,
 
 def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
          tmax=TMAX_ONLINE, task_win=TASK_WIN_ONLINE):
+    """Load Before/After-ICA data for one subject, compute per-band ERD maps,
+    and render/save the Sans Limite comparison figure via `plot_erd_comparison_sl`."""
     band = next((k for k in BANDS_CONFIG if k.lower() == band_raw.lower()), band_raw)
     if band not in BANDS_CONFIG:
         print(f"[ERROR] band must be one of: {list(BANDS_CONFIG.keys())}")
@@ -177,6 +179,8 @@ def _run(band_raw, finger_pairs, load_fn, load_ica_fn, title_prefix, save_name,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between online and
+    offline single-subject modes and drives `_run`."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()

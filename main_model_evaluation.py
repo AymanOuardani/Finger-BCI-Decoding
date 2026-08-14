@@ -71,6 +71,7 @@ accuracy, I_eval, probs, trial_preds, accuracy_online = eval_model(
 # Confusion matrix
 class_names = {2: ["Thumb", "Pinky"], 3: ["Thumb", "Index", "Pinky"]}[nclass]
 
+# Class labels are 1-indexed (1..nclass) in this dataset, not 0-indexed.
 cm   = confusion_matrix(label, trial_preds, labels=list(range(1, nclass + 1)))
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
 

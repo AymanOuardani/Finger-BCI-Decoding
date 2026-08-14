@@ -40,6 +40,9 @@ ALL_SUBJECTS = GROUP_ERD_SUBJECTS
 def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
                title_prefix, save_name,
                tmax=TMAX_ONLINE, task_win=TASK_WIN_ONLINE):
+    """Loop over ALL_SUBJECTS, compute per-subject Before/After-ICA ERD maps,
+    average them across the group, and plot with the Sans Limite (dynamic
+    color scale) renderer instead of the fixed [-0.5, 0] one."""
     band = next((k for k in BANDS_CONFIG if k.lower() == band_raw.lower()), band_raw)
     if band not in BANDS_CONFIG:
         print(f"[ERROR] band must be one of: {list(BANDS_CONFIG.keys())}")
@@ -144,6 +147,8 @@ def _run_group(band_raw, finger_pairs, load_fn, load_ica_fn,
 
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between online and
+    offline group modes and drives `_run_group`."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()

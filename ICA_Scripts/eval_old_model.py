@@ -28,6 +28,9 @@ from config import (
 
 
 def main():
+    """CLI entry point: load the ICA-cleaned evaluation signals for one
+    recording, run them through the ORIGINAL (non-fine-tuned) model, and save
+    the resulting confusion matrix as a robustness check."""
     subj_id, session_num, nclass, task, modeltype = get_standard_args(
         description="Evaluate Base model on ICA signals"
     )
@@ -51,6 +54,9 @@ def main():
 
     # 1. Paths
     orig_eval_paths = generate_eval_paths(subj_id, task, nclass, session_num, modeltype, DATA_FOLDER)
+    # Point at the ICA-cleaned (*_ICA.mat) counterpart of each raw eval file —
+    # the model under test never saw ICA-cleaned data during training, so this
+    # measures how robust it is to that distribution shift.
     artifact_eval_paths = [to_ica_path(p) for p in orig_eval_paths]
 
     missing = [p for p in artifact_eval_paths if not os.path.exists(p)]

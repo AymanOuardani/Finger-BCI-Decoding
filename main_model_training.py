@@ -60,6 +60,8 @@ data, label, params = load_and_filter_data(data_paths, params)
 save_name = os.path.join(save_folder, f'S{subj_id:02}_Sess{session_num:02}_{task}_{nclass}class_{modeltype}.h5')
 
 if modeltype == 'Finetune':
+    # Fine-tuning starts from the already-trained "Orig" model for the same
+    # subject/session/task/class-count, so derive its path from the current one.
     params['modelpath'] = save_name.replace('Finetune', 'Orig')
 
 save_name, best_val_acc = train_models(data, label, save_name, params)
@@ -67,6 +69,7 @@ save_name, best_val_acc = train_models(data, label, save_name, params)
 # Write best val_accuracy to the Val_Accuracy column of the per-condition sheet
 per_sheet = f"{task}_Sess{session_num:02}_{nclass}Class"
 col_val   = SHEET_MODEL_START[modeltype]          # col 1 (Orig) or col 4 (Finetune)
+# Rows are offset from the raw subject id to skip the sheet's header rows (see config.ROW_SUBJECT_OFFSET).
 row_idx   = subj_id + ROW_SUBJECT_OFFSET
 
 write_to_ods(

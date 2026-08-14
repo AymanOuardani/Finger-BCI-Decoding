@@ -36,6 +36,8 @@ BANDS = ["Fullband"]
 # ── per-subject runner ────────────────────────────────────────────────────────
 
 def _run_subject(subj_id, task=TASK):
+    """Generate and save (no display) all correlation-distribution plots for one subject,
+    covering every session/nClass/model combination found in its Corr sheet."""
     print(f"\n{'='*55}\n  S{subj_id:02d}\n{'='*55}")
 
     try:

@@ -181,6 +181,7 @@ EVO_BAND_STYLE = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_ods_cache(ods_path):
+    """Read every sheet of the ODS workbook into a dict of DataFrames (header=None, so rows/cols stay 0-indexed like the sheet)."""
     xl     = pd.ExcelFile(ods_path, engine="odf")
     sheets = {
         name: pd.read_excel(ods_path, engine="odf",
@@ -192,6 +193,7 @@ def load_ods_cache(ods_path):
 
 
 def cell_is_missing(cache, sheet_name, row_idx, col_idx):
+    """True if the cell is absent from the cache, or empty/NaN once read."""
     if sheet_name not in cache:
         return True
     try:
@@ -204,8 +206,15 @@ def cell_is_missing(cache, sheet_name, row_idx, col_idx):
 # ══════════════════════════════════════════════════════════════════════════════
 # ODS WRITE HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+# ODS files are just zip archives containing an OpenDocument XML tree
+# (content.xml). openpyxl/pandas can't write formulas-preserving ODS files, so
+# these helpers patch content.xml directly: locate the target table, locate/
+# split the run-length-encoded row and cell elements, splice in a new value
+# cell at the right column, and re-zip. This preserves everything else in the
+# file (formulas, formatting, other sheets) untouched.
 
 def _get_namespaces(xml_bytes):
+    """Extract the XML namespace prefix -> URI mapping declared on the root element."""
     ns = {}
     for prefix, uri in re.findall(
             rb'xmlns(?::([a-zA-Z0-9_-]*))?="([^"]+)"', xml_bytes):
@@ -215,6 +224,7 @@ def _get_namespaces(xml_bytes):
 
 
 def _new_value_cell(TC, VTYPE, VAL, TP, value):
+    """Build a <table-cell> XML element holding a float value (ODF value-type="float")."""
     cell = ET.Element(TC)
     cell.set(VTYPE, "float")
     cell.set(VAL, str(round(value, 4)))
@@ -224,6 +234,7 @@ def _new_value_cell(TC, VTYPE, VAL, TP, value):
 
 
 def _clone_empty(src, count, REP):
+    """Clone an empty placeholder cell of the same tag, repeated `count` times (ODF run-length encoding)."""
     clone = ET.Element(src.tag)
     if count > 1:
         clone.set(REP, str(count))
@@ -231,6 +242,13 @@ def _clone_empty(src, count, REP):
 
 
 def _set_cell(row_elem, col_idx, value, ns_map):
+    """Write `value` into column `col_idx` of a <table-row> element, splitting any run-length-encoded cell that currently spans it.
+
+    ODF rows store repeated identical cells as one element with a
+    number-columns-repeated attribute rather than one element per column, so
+    inserting a single value requires locating which repeated run contains
+    col_idx and splitting it into (before, new-value-cell, after) pieces.
+    """
     T   = ns_map["table"];  O = ns_map["office"];  TXT = ns_map["text"]
     TC    = f"{{{T}}}table-cell"
     COV   = f"{{{T}}}covered-table-cell"
@@ -239,11 +257,14 @@ def _set_cell(row_elem, col_idx, value, ns_map):
     VAL   = f"{{{O}}}value"
     TP    = f"{{{TXT}}}p"
 
+    # Flatten the row's cells into (element, repeat-count) pairs so column
+    # indices can be resolved against the repeated-run encoding.
     flat = []
     for child in list(row_elem):
         if child.tag in (TC, COV):
             flat.append([child, int(child.get(REP, "1"))])
 
+    # Walk the runs to find which one contains col_idx, and the offset within it.
     cursor = 0; seg_idx = None; offset = 0
     for i, (elem, rep) in enumerate(flat):
         if cursor <= col_idx < cursor + rep:
@@ -251,6 +272,8 @@ def _set_cell(row_elem, col_idx, value, ns_map):
         cursor += rep
 
     if seg_idx is None:
+        # col_idx is beyond all existing cells: pad with empty cells up to it,
+        # then append the new value cell.
         existing = sum(r for _, r in flat)
         gap = col_idx - existing
         if gap > 0:
@@ -258,6 +281,8 @@ def _set_cell(row_elem, col_idx, value, ns_map):
             flat.append([pad, gap])
         flat.append([_new_value_cell(TC, VTYPE, VAL, TP, value), 1])
     else:
+        # col_idx falls inside an existing repeated run: split it into up to
+        # three pieces (cells before, the new value cell, cells after).
         src, rep = flat[seg_idx]
         pieces = []
         if offset > 0:
@@ -268,6 +293,8 @@ def _set_cell(row_elem, col_idx, value, ns_map):
             pieces.append([_clone_empty(src, after, REP), after])
         flat[seg_idx:seg_idx + 1] = pieces
 
+    # Rebuild the row: drop all old cell elements, re-insert the updated list
+    # after any non-cell children (e.g. row metadata) that must stay first.
     for child in list(row_elem):
         if child.tag in (TC, COV):
             row_elem.remove(child)
@@ -277,6 +304,7 @@ def _set_cell(row_elem, col_idx, value, ns_map):
 
 
 def _find_table(root, ns_map, table_name):
+    """Return the <table:table> element matching `table_name` (the ODS sheet name)."""
     T = ns_map["table"]
     for elem in root.iter(f"{{{T}}}table"):
         if elem.get(f"{{{T}}}name") == table_name:
@@ -285,6 +313,11 @@ def _find_table(root, ns_map, table_name):
 
 
 def _expand_rows(table_elem, ns_map):
+    """Expand any number-rows-repeated run into individual <table-row> elements, in place.
+
+    Needed so row indices used elsewhere (row_idx = subj_id + offset) map
+    1:1 onto real row elements instead of being swallowed inside a repeated run.
+    """
     T  = ns_map["table"]
     TR = f"{{{T}}}table-row"
     RR = f"{{{T}}}number-rows-repeated"
@@ -317,6 +350,12 @@ def _normalize_formula_prefixes(content):
 
 
 def write_to_ods(ods_path, row_idx, writes, table_name):
+    """Write one or more (col_idx, value) pairs into a row of an ODS sheet, in place.
+
+    Rewrites content.xml inside the .ods zip archive directly (via the cell
+    helpers above) so existing formulas and formatting in the file are
+    preserved — something pandas/openpyxl round-tripping would not guarantee.
+    """
     with zipfile.ZipFile(ods_path, "r") as z:
         content_bytes = z.read("content.xml")
 
@@ -362,6 +401,7 @@ def write_to_ods(ods_path, row_idx, writes, table_name):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _run_eval(subj_id, task, session, nclass, modeltype, bandpass_filt):
+    """Load the trained model + eval data for one (task, session, nclass, model) combo, band-pass filtered as requested, and return (accuracy, online_accuracy, trial_preds, label_data) — or all-None on missing model / failure."""
     model_path = os.path.join(
         SAVE_FOLDER,
         f"S{subj_id:02}_Sess{session:02}_{task}_{nclass}class_{modeltype}.h5"
@@ -397,6 +437,7 @@ def _run_eval(subj_id, task, session, nclass, modeltype, bandpass_filt):
 
 def _write_acc_to_ods_and_cache(ods_path, cache, sheet_name, row_idx,
                                  modeltype, accuracy, accuracy_online):
+    """Persist a newly computed accuracy to both the ODS file on disk and the in-memory cache, so subsequent checks in this run see it without re-reading the file."""
     # ── Write to ODS file ─────────────────────────────────────────────────────
     try:
         write_to_ods(
@@ -452,6 +493,7 @@ def _write_acc_to_ods_and_cache(ods_path, cache, sheet_name, row_idx,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_missing_cms_and_main_acc(subj_id, subj_folder, cache):
+    """For every (task, session, nclass, model) combo, generate the full-band [4-40 Hz] confusion matrix PNG and/or write the main accuracy to the ODS, but only for whichever of the two is currently missing."""
     print("\n── Checking full-band CMs + main accuracies ─────────────────")
 
     for task, session, nclass, modeltype in CM_COMBOS:
@@ -514,6 +556,7 @@ def generate_missing_cms_and_main_acc(subj_id, subj_folder, cache):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_missing_band_accuracies(subj_id, cache):
+    """For every frequency band (Alpha/Beta/Beta+) and every (task, session, nclass, model) combo, evaluate and write the accuracy to the ODS if it is not already present."""
     print("\n── Checking Alpha / Beta / Beta+ accuracies ─────────────────")
 
     for band_name, band_cfg in BANDS.items():
@@ -554,6 +597,7 @@ def generate_missing_band_accuracies(subj_id, cache):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _evo_read(cache, task, nclass, session, modeltype, row_offset):
+    """Read one online-performance accuracy value from the ODS cache for the evolution plot, or None if missing/NaN."""
     sheet_name = f"{task}_Sess{session:02}_{nclass}Class"
     if sheet_name not in cache:
         return None
@@ -567,6 +611,7 @@ def _evo_read(cache, task, nclass, session, modeltype, row_offset):
 
 
 def _evo_has_any_data(cache, task, nclass):
+    """True if at least one band/condition has a usable accuracy value for this (task, nclass) — otherwise the plot would be empty."""
     for band_name, row_offset in EVO_ROW_OFFSETS.items():
         for _, session, modeltype in EVO_CONDITIONS:
             if _evo_read(cache, task, nclass, session,
@@ -576,10 +621,15 @@ def _evo_has_any_data(cache, task, nclass):
 
 
 def evo_fname(subj_id, task, nclass):
+    """Filename for the accuracy-evolution PNG of one (subject, task, nclass) combo."""
     return f"AccuracyEvolution_S{subj_id:02}_{task}_{nclass}class.png"
 
 
 def generate_evolution_plot(subj_id, subj_folder, task, nclass, cache):
+    """Plot online accuracy across the four conditions (session x base/fine-tuned), one line per frequency band, and save the PNG.
+
+    Returns False (and does not save) if no data is available for any band.
+    """
     x        = np.arange(len(EVO_CONDITIONS))
     x_labels = [c[0] for c in EVO_CONDITIONS]
 
@@ -594,6 +644,8 @@ def generate_evolution_plot(subj_id, subj_folder, task, nclass, cache):
         ]
 
         # ── split at None gaps ────────────────────────────────────────────────
+        # Break the line into separate segments wherever a value is missing,
+        # instead of interpolating across the gap or plotting through zero.
         xs_segs, ys_segs = [], []
         xs_cur,  ys_cur  = [], []
         for xi, val in zip(x, values):
@@ -675,6 +727,7 @@ def generate_evolution_plot(subj_id, subj_folder, task, nclass, cache):
 
 
 def check_and_generate_evolution_plots(subj_id, subj_folder, cache):
+    """For every (task, nclass) combo, generate the accuracy-evolution PNG if missing (or forced), skipping combos with no data at all."""
     print("\n── Checking accuracy evolution plots ────────────────────────")
 
     for task in ("ME", "MI"):
@@ -710,12 +763,23 @@ def check_and_generate_evolution_plots(subj_id, subj_folder, cache):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_eval_folder(task, session, nclass, model_type):
+    """Build the dataset folder name for one (task, session, nclass, model) online-evaluation recording."""
     modality    = "Movement" if task == "ME" else "Imagery"
     eval_suffix = "Finetune" if model_type == "Finetune" else "Base"
     return f"Online{modality}_Sess{session:02}_{nclass}class_{eval_suffix}"
 
 
 def load_and_preprocess_saliency(subj_id, task, session, nclass, model_type):
+    """Load raw .mat recordings for one condition and turn them into model-ready EEGNet input segments.
+
+    For each trial (Target -> TrialEnd event span): crop/pad to a fixed
+    max trial length, then slide a WINDOWLEN-second window across it
+    (step_size samples at a time) to produce multiple overlapping segments.
+    Each segment is resampled to DOWNSRATE, band-pass filtered (with edge
+    padding to limit filter artifacts at the window boundary), then
+    z-scored per channel. Returns an array shaped for EEGNet:
+    (n_segments, n_channels, n_samples, 1), or None if nothing usable was found.
+    """
     folder = os.path.join(
         DATA_FOLDER, f"S{subj_id:02}",
         get_eval_folder(task, session, nclass, model_type)
@@ -743,6 +807,8 @@ def load_and_preprocess_saliency(subj_id, task, session, nclass, model_type):
         signals = eeg["data"][0][0].astype(float)
         srate   = int(eeg["fsample"][0][0][0][0])
 
+        # Trial boundaries come from the event markers written by the
+        # acquisition software: "Target" = trial onset, "TrialEnd" = offset.
         start_idx, end_idx = [], []
         for i in range(event.shape[1]):
             evt   = event[0, i]
@@ -755,18 +821,23 @@ def load_and_preprocess_saliency(subj_id, task, session, nclass, model_type):
 
         for s, e in zip(start_idx, end_idx):
             tmp = signals[:, s:e].astype(float)
+            # Cap every trial to maxtriallen seconds, then NaN-pad shorter
+            # trials to the same fixed length so all trials give a
+            # consistent number of sliding-window segments.
             tmp = tmp[:, :min(tmp.shape[1], int(maxtriallen * srate))]
             tmp = np.pad(tmp,
                          ((0, 0),
                           (0, int(maxtriallen * srate) - tmp.shape[1])),
                          "constant", constant_values=np.nan)
-            tmp -= tmp.mean(axis=0, keepdims=True)
+            tmp -= tmp.mean(axis=0, keepdims=True)  # per-channel DC removal
 
             for t0 in range(0, tmp.shape[1] - segment_size + 1, step_size):
                 seg = tmp[:, t0:t0 + segment_size]
                 if np.isnan(seg).any():
-                    continue
+                    continue  # window overlaps the NaN padding: trial too short here
                 seg      = scipy.signal.resample(seg, desired_len, axis=1)
+                # Pad before filtering to reduce edge (transient) artifacts
+                # from the IIR filter, then crop the padding back off.
                 padded   = np.pad(seg,
                                   ((0, 0), (padding_len, padding_len)),
                                   "constant", constant_values=0)
@@ -785,6 +856,15 @@ def load_and_preprocess_saliency(subj_id, task, session, nclass, model_type):
 
 
 def compute_saliency(model, X, verbose=True):
+    """Compute a per-channel gradient-based saliency map from the trained EEGNet model.
+
+    Uses vanilla gradient saliency: the gradient of the summed model output
+    w.r.t. the input, averaged over segments and summed over time, giving one
+    saliency value per EEG channel. The result is min-max normalized to [0, 1].
+    Channels more than 2 standard deviations from the mean are treated as
+    outliers (e.g. noisy/bad electrodes) and set to NaN so they don't distort
+    the topomap color scale.
+    """
     X_tensor = tf.constant(X, dtype=tf.float32)
     with tf.GradientTape() as tape:
         tape.watch(X_tensor)
@@ -818,10 +898,12 @@ def compute_saliency(model, X, verbose=True):
 
 
 def saliency_fname(nclass, model_type):
+    """Filename for the saliency-maps grid PNG of one (nclass, model_type) combo."""
     return f"Saliency_Maps_{nclass}class_{model_type}.png"
 
 
 def generate_saliency_map(subj_id, subj_folder, nclass, model_type):
+    """Compute and plot a grid of scalp saliency topomaps (ME/MI x Session 1/2/Average) for one (nclass, model_type) combo, and save the PNG."""
     import mne
     K.set_image_data_format("channels_last")
 
@@ -956,6 +1038,7 @@ def generate_saliency_map(subj_id, subj_folder, nclass, model_type):
 
 
 def check_and_generate_saliency(subj_id, subj_folder):
+    """For every (nclass, model_type) combo, generate the saliency-maps PNG if missing (or forced)."""
     print("\n── Checking saliency maps ───────────────────────────────────")
     for nclass, model_type in SALIENCY_COMBOS:
         fname    = saliency_fname(nclass, model_type)
@@ -1076,6 +1159,7 @@ def figure_inventory(subj_id, subj_folder):
 
 
 def _style_header(ws, n_columns):
+    """Bold white-on-navy header row, centered, with the first data row frozen."""
     from openpyxl.styles import Alignment, Font, PatternFill
     fill = PatternFill("solid", fgColor="002060")
     font = Font(bold=True, color="FFFFFF")
@@ -1088,6 +1172,7 @@ def _style_header(ws, n_columns):
 
 
 def _autosize(ws, header, rows, cap=52):
+    """Set each column's width to fit its longest value (header or data), capped at `cap` characters."""
     from openpyxl.utils import get_column_letter
     for idx, name in enumerate(header, start=1):
         longest = max([len(str(name))] +
@@ -1195,6 +1280,7 @@ def _embed_images(wb, fig_name, fig_rows):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    """Run the full per-subject report pipeline: generate any missing confusion matrices, band accuracies, evolution plots and saliency maps, then write/refresh the subject's sheets in the shared Excel workbook."""
     subj_folder = os.path.join(CM_ROOT, f"Sujet {SUBJ_ID}")
     os.makedirs(subj_folder, exist_ok=True)
 

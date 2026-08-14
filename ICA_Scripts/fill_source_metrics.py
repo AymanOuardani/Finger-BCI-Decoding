@@ -101,6 +101,8 @@ def source_metrics(energy, membership):
 
 
 def main():
+    """CLI entry point: parse args, compute per-source metrics for the recording,
+    and write them to the Source_Metrics.xlsx workbook."""
     if len(sys.argv) < 5:
         print(__doc__)
         sys.exit(1)
@@ -146,6 +148,8 @@ def main():
                 round(m["kurtosis"], 2), round(m["max_median"], 2),
             ])
 
+    # Trial-energy arrays are (n_trials, n_components) and can be large; free
+    # them explicitly once every row has been extracted.
     del E, E_band
     gc.collect()
 

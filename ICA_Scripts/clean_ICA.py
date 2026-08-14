@@ -38,6 +38,9 @@ Usage:
 
 
 def clean_online(subj, sess, ncl, task, model):
+    """Run the interactive ICA cleaning flow for one online subject/session:
+    load the raw .mat files, fit/reload ICA, let the user validate exclusions
+    interactively, then save the ICA-cleaned trials as *_ICA.mat files."""
     print("=" * 60)
     print(f"  Interactive Online ICA: S{subj:02} Sess{sess:02} | {task} {ncl}-class | {model}")
     print("=" * 60)
@@ -70,6 +73,9 @@ def clean_online(subj, sess, ncl, task, model):
 
 
 def clean_offline(subj_id, task):
+    """Run the interactive ICA cleaning flow for one offline subject/task:
+    load the raw .mat files, notch-filter line noise, fit/reload ICA, let the
+    user validate exclusions interactively, then save the cleaned trials."""
     print("=" * 60)
     print(f"  Interactive Offline ICA: S{subj_id:02} | {task}")
     print("=" * 60)
@@ -81,6 +87,9 @@ def clean_offline(subj_id, task):
 
     print(f"\nLoading {len(mat_files)} offline file(s) from:\n  {folder}")
     raw, _, _ = build_raw_from_mat_files(mat_files)
+    # Notch out 60 Hz US mains hum and its harmonics (120, 180, ... 480 Hz)
+    # before ICA fitting; the online path skips this since its data is
+    # already preprocessed upstream.
     raw.notch_filter(np.arange(60, 501, 60))
 
     ica_cache_path = get_ica_fif_path(subj_id, task)  # session=0 → Offline
@@ -103,6 +112,8 @@ def clean_offline(subj_id, task):
 
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between offline and
+    online interactive ICA cleaning."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()

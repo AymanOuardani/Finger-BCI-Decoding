@@ -52,12 +52,19 @@ def ensure_offline_ica(subj, task):
             f"No offline .mat files in {folder} to fit the reusable ICA.")
     raw, _, _ = build_raw_from_mat_files(mat_files)
     raw.notch_filter(np.arange(60, 501, 60))
+    # ICA is fit on a 1 Hz highpassed copy (standard practice: removes slow
+    # drifts that otherwise dominate the decomposition) while the original,
+    # non-highpassed `raw` is what the resulting components get applied to.
     raw_filt = raw.copy().filter(1.0, None, verbose=False)
     fit_or_load_ica(raw_filt, path)              # fits and saves to `path`
     return path
 
 
 def clean_online(subj, sess, ncl, task, model):
+    """Interactively clean one online session using the subject's shared
+    OFFLINE ICA mixing matrix (fitted/cached via `ensure_offline_ica`); the
+    per-session exclusion choices are saved only to this session's *_ICA.mat
+    files, never back into the shared offline .fif."""
     print("=" * 60)
     print(f"  Interactive Online ICA (OFFLINE ICA): "
           f"S{subj:02} Sess{sess:02} | {task} {ncl}-class | {model}")
@@ -91,6 +98,9 @@ def clean_online(subj, sess, ncl, task, model):
 
 
 def clean_offline(subj_id, task):
+    """Interactively clean the offline recording itself, fitting/reloading
+    its own ICA and persisting the validated exclusions back into its .fif
+    (this is the recording whose ICA gets reused by `clean_online`)."""
     print("=" * 60)
     print(f"  Interactive Offline ICA (OFFLINE ICA): S{subj_id:02} | {task}")
     print("=" * 60)
@@ -126,6 +136,8 @@ def clean_offline(subj_id, task):
 
 
 def main():
+    """CLI entry point: parses sys.argv to dispatch between offline and
+    online interactive ICA cleaning, both using the shared offline ICA."""
     try:
         if len(sys.argv) > 1 and sys.argv[-1].upper() == "OFF":
             sys.argv.pop()
